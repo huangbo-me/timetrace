@@ -3,7 +3,7 @@ import MapKit
 import SwiftUI
 
 struct OnboardingView: View {
-    @EnvironmentObject private var model: AppModel
+    @EnvironmentObject private var store: OnboardingFeatureStore
     @State private var coordinate = CLLocationCoordinate2D(latitude: 31.2304, longitude: 121.4737)
     @State private var position: MapCameraPosition = .camera(
         MapCamera(
@@ -22,6 +22,8 @@ struct OnboardingView: View {
     @State private var locating = false
     @State private var locationAccuracy: CLLocationAccuracy?
     @State private var usesReducedAccuracy = false
+
+    private var model: AppModel { store.application }
 
     var body: some View {
         NavigationStack {
@@ -286,7 +288,7 @@ private struct WorkplaceSearchResult: Identifiable {
 }
 
 struct WorkplaceAddressSearch: View {
-    @EnvironmentObject private var model: AppModel
+    @EnvironmentObject private var store: OnboardingFeatureStore
     @Binding var coordinate: CLLocationCoordinate2D
     @Binding var position: MapCameraPosition
 
@@ -297,6 +299,8 @@ struct WorkplaceAddressSearch: View {
     @State private var results: [WorkplaceSearchResult] = []
     @State private var message: String?
     @State private var isSearching = false
+
+    private var model: AppModel { store.application }
     @State private var isDeterminingCity = false
     @State private var showingCityPicker = false
 

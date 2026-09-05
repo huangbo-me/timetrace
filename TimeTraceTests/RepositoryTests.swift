@@ -11,6 +11,70 @@ final class RepositoryTests: XCTestCase {
         XCTAssertEqual(TimeTraceLocalization.locale.language.script?.identifier, "Hans")
     }
 
+    func testValueMapperDetachesPresentationDataFromSwiftDataRecord() {
+        let activity = ActivityDefinition(name: "工作", type: .work)
+        let trigger = ActivityTrigger(
+            activityId: activity.id,
+            type: .geofence,
+            latitude: 31.2304,
+            longitude: 121.4737,
+            radius: 200,
+            placeName: "办公室",
+            placeType: .work
+        )
+
+        let value = TimelineValueMapper.place(trigger)
+
+        XCTAssertEqual(value.id, trigger.id)
+        XCTAssertEqual(value.name, "办公室")
+        XCTAssertEqual(value.coordinate, CoordinateValue(latitude: 31.2304, longitude: 121.4737))
+        trigger.placeName = "已修改"
+        XCTAssertEqual(value.name, "办公室", "值对象不应随 SwiftData 记录突变")
+    }
+
+    func testFeatureStoresShareChangesWithoutExposingPersistenceToRoot() {
+        let application = AppModel(
+            inMemory: true,
+            geofence: FakeGeofenceService(),
+            notifications: FakeNotificationService()
+        )
+        let container = AppContainer(application: application)
+
+        XCTAssertFalse(container.root.state.isLoaded)
+        container.root.loadIfNeeded()
+        XCTAssertTrue(container.root.state.isLoaded)
+        XCTAssertEqual(container.places.state.placeCount, 0)
+        XCTAssertFalse(container.today.state.isOnboarded)
+    }
+
+    func testPlatformCapabilityMapsLocationAuthorizationIndependently() {
+        XCTAssertEqual(PlatformCapabilityStatus.geofence(for: .authorizedAlways), .available)
+        XCTAssertEqual(PlatformCapabilityStatus.geofence(for: .notDetermined), .needsAuthorization)
+        XCTAssertEqual(PlatformCapabilityStatus.geofence(for: .denied), .restricted)
+    }
+
+    func testPlaceIsPersistedWhenGeofenceRegistrationIsUnavailable() throws {
+        let geofence = FakeGeofenceService()
+        geofence.shouldFailRegistration = true
+        let model = AppModel(inMemory: true, geofence: geofence, notifications: FakeNotificationService())
+
+        model.load()
+        model.finishOnboarding(
+            latitude: 31.2,
+            longitude: 121.4,
+            radius: 200,
+            weekdaysMask: 0b0111110,
+            normalStartMinute: nil,
+            normalEndMinute: nil
+        )
+
+        XCTAssertTrue(model.isOnboarded)
+        XCTAssertEqual(model.workTriggers.count, 1)
+        guard case .unavailable = model.geofenceCapabilityStatus else {
+            return XCTFail("围栏故障应作为可恢复的能力状态公开")
+        }
+    }
+
     func testMainlandChinaMapCoordinateRoundTripKeepsSystemGeofenceCoordinate() {
         let systemCoordinate = CLLocationCoordinate2D(latitude: 31.2304, longitude: 121.4737)
         let mapCoordinate = ChinaMapCoordinateConverter.mapCoordinate(fromSystemCoordinate: systemCoordinate)
@@ -295,6 +359,7 @@ private final class FakeGeofenceService: GeofenceServicing {
     var onAuthorizationChange: ((CLAuthorizationStatus) -> Void)?
     private(set) var registeredTriggerIds: [UUID] = []
     private(set) var removedTriggerIds: [UUID] = []
+    var shouldFailRegistration = false
 
     func requestWhenInUseAuthorization() {}
     func requestAlwaysAuthorization() {}
@@ -302,6 +367,7 @@ private final class FakeGeofenceService: GeofenceServicing {
         CLLocationCoordinate2D(latitude: 31.2, longitude: 121.4)
     }
     func register(triggerId: UUID, latitude: Double, longitude: Double, radius: Double) throws -> Double {
+        if shouldFailRegistration { throw GeofenceError.locationUnavailable }
         registeredTriggerIds.append(triggerId)
         return radius
     }

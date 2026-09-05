@@ -2,11 +2,13 @@ import Charts
 import SwiftUI
 
 struct InsightsView: View {
-    @EnvironmentObject private var model: AppModel
+    @EnvironmentObject private var store: InsightsFeatureStore
     @State private var range = InsightRange.thisWeek
     @State private var customStart = Calendar.current.date(byAdding: .day, value: -6, to: Date()) ?? Date()
     @State private var customEnd = Date()
     @State private var trendMetric = TrendMetric.workDuration
+
+    private var model: AppModel { store.application }
 
     var body: some View {
         ScrollView(showsIndicators: false) {

@@ -2,7 +2,7 @@ import SwiftUI
 
 @main
 struct TimeTraceApp: App {
-    @StateObject private var model = AppModel()
+    @StateObject private var container = AppContainer()
     @Environment(\.scenePhase) private var scenePhase
 
     var body: some Scene {
@@ -13,20 +13,25 @@ struct TimeTraceApp: App {
                     .frame(maxWidth: .infinity, maxHeight: .infinity)
             }
             .ignoresSafeArea()
-            .environmentObject(model)
+            .environmentObject(container.root)
+            .environmentObject(container.onboarding)
+            .environmentObject(container.today)
+            .environmentObject(container.insights)
+            .environmentObject(container.places)
+            .environmentObject(container.history)
+            .environmentObject(container.settings)
             .environment(\.locale, TimeTraceLocalization.locale)
             .task {
-                if !model.isLoaded { model.load() }
+                container.root.loadIfNeeded()
 #if DEBUG
                 if ProcessInfo.processInfo.arguments.contains("--history-validation") {
-                    _ = model.generateThirtyDayDemoData()
+                    _ = container.application.generateThirtyDayDemoData()
                 }
 #endif
             }
             .onChange(of: scenePhase) { _, phase in
                 guard phase == .active else { return }
-                model.refreshSyncedData()
-                model.refreshICloudSyncStatus()
+                container.root.becameActive()
             }
         }
     }

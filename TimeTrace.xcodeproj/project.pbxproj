@@ -7,6 +7,10 @@
 	objects = {
 
 /* Begin PBXBuildFile section */
+		A00000000000000000000004 /* UnavailableRepositories.swift in Sources */ = {isa = PBXBuildFile; fileRef = A00000000000000000000014 /* UnavailableRepositories.swift */; };
+		A00000000000000000000001 /* AppContainer.swift in Sources */ = {isa = PBXBuildFile; fileRef = A00000000000000000000011 /* AppContainer.swift */; };
+		A00000000000000000000002 /* PlatformCapability.swift in Sources */ = {isa = PBXBuildFile; fileRef = A00000000000000000000012 /* PlatformCapability.swift */; };
+		A00000000000000000000003 /* TimelineValueTypes.swift in Sources */ = {isa = PBXBuildFile; fileRef = A00000000000000000000013 /* TimelineValueTypes.swift */; };
 		02F3DEFDD3CDAEF7E6D5327A /* EventPipeline.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0B557414C3A11F00AEC7E482 /* EventPipeline.swift */; };
 		04A4C121411A47B299299592 /* Assets.xcassets in Resources */ = {isa = PBXBuildFile; fileRef = 7F6C610BB7F64BCBA05DD1A4 /* Assets.xcassets */; };
 		0780573C75AE56C44D0C1D5F /* AnalyticsService.swift in Sources */ = {isa = PBXBuildFile; fileRef = 347A64E6514960F2EBCA0A3F /* AnalyticsService.swift */; };
@@ -48,6 +52,10 @@
 /* End PBXContainerItemProxy section */
 
 /* Begin PBXFileReference section */
+		A00000000000000000000014 /* UnavailableRepositories.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; name = UnavailableRepositories.swift; path = Persistence/UnavailableRepositories.swift; sourceTree = "<group>"; };
+		A00000000000000000000011 /* AppContainer.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; name = AppContainer.swift; path = App/AppContainer.swift; sourceTree = "<group>"; };
+		A00000000000000000000012 /* PlatformCapability.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; name = PlatformCapability.swift; path = Platform/PlatformCapability.swift; sourceTree = "<group>"; };
+		A00000000000000000000013 /* TimelineValueTypes.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; name = TimelineValueTypes.swift; path = Domain/TimelineValueTypes.swift; sourceTree = "<group>"; };
 		0B557414C3A11F00AEC7E482 /* EventPipeline.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; name = EventPipeline.swift; path = Services/EventPipeline.swift; sourceTree = "<group>"; };
 		7F6C610BB7F64BCBA05DD1A4 /* Assets.xcassets */ = {isa = PBXFileReference; lastKnownFileType = folder.assetcatalog; path = Assets.xcassets; sourceTree = "<group>"; };
 		111335E20644ED4A05943CB7 /* TimeTraceApp.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; name = TimeTraceApp.swift; path = App/TimeTraceApp.swift; sourceTree = "<group>"; };
@@ -135,6 +143,10 @@
 		B89D5997ED35BFB597FBEDD9 /* TimeTrace */ = {
 			isa = PBXGroup;
 			children = (
+				A00000000000000000000014 /* UnavailableRepositories.swift */,
+				A00000000000000000000011 /* AppContainer.swift */,
+				A00000000000000000000012 /* PlatformCapability.swift */,
+				A00000000000000000000013 /* TimelineValueTypes.swift */,
 				7F6C610BB7F64BCBA05DD1A4 /* Assets.xcassets */,
 				A41C9B000000000000000006 /* PrivacyInfo.xcprivacy */,
 				A41C9B000000000000000008 /* ChinaWorkCalendar.swift */,
@@ -277,6 +289,10 @@
 			isa = PBXSourcesBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
+				A00000000000000000000004 /* UnavailableRepositories.swift in Sources */,
+				A00000000000000000000001 /* AppContainer.swift in Sources */,
+				A00000000000000000000002 /* PlatformCapability.swift in Sources */,
+				A00000000000000000000003 /* TimelineValueTypes.swift in Sources */,
 				A25A6C9549869202CACCBAEA /* AppModel.swift in Sources */,
 				B4817055792A39952374C161 /* RootView.swift in Sources */,
 				775DB53DB71B1E75FCE67640 /* TimeTraceApp.swift in Sources */,

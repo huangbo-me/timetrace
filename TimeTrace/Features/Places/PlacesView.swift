@@ -15,10 +15,12 @@ private enum PlaceEditorTarget: Identifiable {
 }
 
 struct PlacesView: View {
-    @EnvironmentObject private var model: AppModel
+    @EnvironmentObject private var store: PlacesFeatureStore
     @State private var editorTarget: PlaceEditorTarget?
     @State private var mapPosition: MapCameraPosition = .automatic
     @State private var selectedTriggerId: UUID?
+
+    private var model: AppModel { store.application }
 
     var body: some View {
         ScrollView(showsIndicators: false) {

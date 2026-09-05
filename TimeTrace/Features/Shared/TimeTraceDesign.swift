@@ -91,6 +91,23 @@ struct TTSectionTitle: View {
     }
 }
 
+/// Reusable, non-blocking feedback used when an optional platform capability
+/// is unavailable. It keeps feature content visible instead of replacing it
+/// with an error screen.
+struct TTCapabilityNotice: View {
+    let message: String
+    var systemImage: String = "exclamationmark.triangle.fill"
+
+    var body: some View {
+        Label(message, systemImage: systemImage)
+            .font(.caption)
+            .foregroundStyle(.orange)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .padding(10)
+            .background(.orange.opacity(0.10), in: RoundedRectangle(cornerRadius: 12, style: .continuous))
+    }
+}
+
 extension View {
     func timeTraceScreen() -> some View {
         self

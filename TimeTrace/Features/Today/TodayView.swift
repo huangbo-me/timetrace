@@ -1,8 +1,10 @@
 import SwiftUI
 
 struct TodayView: View {
-    @EnvironmentObject private var model: AppModel
+    @EnvironmentObject private var store: TodayFeatureStore
     @AppStorage("profileNickname") private var profileNickname = ""
+
+    private var model: AppModel { store.application }
 
     var body: some View {
         TimelineView(.periodic(from: .now, by: 60)) { timeline in

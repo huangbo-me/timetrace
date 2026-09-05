@@ -46,6 +46,8 @@ final class AppModel: ObservableObject {
     @Published private(set) var reminderInstances: [ReminderInstance] = []
     @Published private(set) var locationAuthorizationStatus: CLAuthorizationStatus
     @Published private(set) var iCloudSyncStatus: ICloudSyncStatus = .checking
+    @Published private(set) var geofenceCapabilityStatus: PlatformCapabilityStatus = .needsAuthorization
+    @Published private(set) var notificationCapabilityStatus: PlatformCapabilityStatus = .needsAuthorization
     @Published var lastError: String?
 
     let geofence: GeofenceServicing
@@ -96,6 +98,7 @@ final class AppModel: ObservableObject {
         let geofence = geofence ?? CoreLocationGeofenceService()
         self.geofence = geofence
         self.locationAuthorizationStatus = geofence.authorizationStatus
+        self.geofenceCapabilityStatus = .geofence(for: geofence.authorizationStatus)
         do {
             let persistence = try PersistenceController(inMemory: inMemory)
             isCloudKitEnabled = persistence.isCloudKitEnabled
@@ -109,7 +112,16 @@ final class AppModel: ObservableObject {
             self.reminderRepository = reminders
             self.pipeline = EventPipeline(events: events, sessions: sessions)
         } catch {
-            fatalError("无法初始化本地数据库：\(error.localizedDescription)")
+            let activities = UnavailableActivityRepository()
+            let events = UnavailableEventRepository()
+            let sessions = UnavailableSessionRepository()
+            let reminders = UnavailableReminderRepository()
+            self.activityRepository = activities
+            self.eventRepository = events
+            self.sessionRepository = sessions
+            self.reminderRepository = reminders
+            self.pipeline = EventPipeline(events: events, sessions: sessions)
+            self.lastError = "本地存储暂不可用；已以只读模式打开。"
         }
         self.notifications = notifications ?? LocalNotificationService()
         self.analytics = AnalyticsService()
@@ -117,6 +129,7 @@ final class AppModel: ObservableObject {
         self.geofence.onEvent = { [weak self] event in self?.handleGeofence(event) }
         self.geofence.onAuthorizationChange = { [weak self] status in
             self?.locationAuthorizationStatus = status
+            self?.geofenceCapabilityStatus = .geofence(for: status)
         }
         self.notifications.onAction = { [weak self] action in self?.receiveNotificationAction(action) }
         self.notifications.registerCategories()
@@ -205,14 +218,8 @@ final class AppModel: ObservableObject {
                 timeZoneIdentifier: TimeZone.current.identifier
             )
             trigger.regionIdentifier = "timetrace.place.\(trigger.id.uuidString)"
-            let acceptedRadius = try geofence.register(
-                triggerId: trigger.id,
-                latitude: latitude,
-                longitude: longitude,
-                radius: radius
-            )
-            trigger.radius = acceptedRadius
             try activityRepository.save(trigger)
+            reconcileGeofence(trigger, fallbackMessage: "地点已保存；定位恢复后会自动开启记录。")
             geofence.requestAlwaysAuthorization()
             requestGeofenceNotificationAuthorization()
             load()
@@ -239,10 +246,8 @@ final class AppModel: ObservableObject {
                 timeZoneIdentifier: TimeZone.current.identifier
             )
             trigger.regionIdentifier = "timetrace.place.\(trigger.id.uuidString)"
-            let accepted = try geofence.register(triggerId: trigger.id, latitude: latitude,
-                                                  longitude: longitude, radius: radius)
-            trigger.radius = accepted
             try activityRepository.save(trigger)
+            reconcileGeofence(trigger, fallbackMessage: "地点已保存；定位恢复后会自动开启记录。")
             refreshPublishedData()
         } catch { lastError = TimeTraceLocalization.errorMessage(error, fallback: "添加地点失败，请稍后重试。") }
     }
@@ -251,15 +256,14 @@ final class AppModel: ObservableObject {
                          placeName: String, placeType: PlaceType = .work) {
         guard let trigger = triggers.first(where: { $0.id == triggerId && $0.type == .geofence }) else { return }
         do {
-            let accepted = try geofence.register(triggerId: trigger.id, latitude: latitude,
-                                                  longitude: longitude, radius: radius)
             trigger.latitude = latitude
             trigger.longitude = longitude
-            trigger.radius = accepted
+            trigger.radius = radius
             trigger.placeName = normalizedPlaceName(placeName)
             trigger.placeType = placeType
             trigger.timeZoneIdentifier = TimeZone.current.identifier
             try activityRepository.save(trigger)
+            reconcileGeofence(trigger, fallbackMessage: "地点已更新；定位恢复后会自动开启记录。")
             refreshPublishedData()
         } catch { lastError = TimeTraceLocalization.errorMessage(error, fallback: "更新地点失败，请稍后重试。") }
     }
@@ -661,8 +665,18 @@ final class AppModel: ObservableObject {
                                           timeZoneIdentifier: TimeZone.current.identifier)
             try activityRepository.save(trigger)
             try reminderRepository.save(reminder)
-            _ = try await notifications.requestAuthorization()
-            try await notifications.schedule(reminder)
+            do {
+                let authorized = try await notifications.requestAuthorization()
+                guard authorized else {
+                    notificationCapabilityStatus = .needsAuthorization
+                    refreshPublishedData()
+                    return
+                }
+                try await notifications.schedule(reminder)
+                notificationCapabilityStatus = .available
+            } catch {
+                notificationCapabilityStatus = .unavailable(message: "提醒已保存；通知恢复后会自动生效。")
+            }
             refreshPublishedData()
         } catch { lastError = TimeTraceLocalization.errorMessage(error, fallback: "创建提醒失败，请稍后重试。") }
     }
@@ -832,14 +846,43 @@ final class AppModel: ObservableObject {
         } catch { lastError = TimeTraceLocalization.errorMessage(error, fallback: "保存定位事件失败，请稍后重试。") }
     }
 
+    /// Registration is an adapter concern. Persisting a place must not depend
+    /// on Core Location being temporarily available on this device.
+    private func reconcileGeofence(_ trigger: ActivityTrigger, fallbackMessage: String) {
+        guard let latitude = trigger.latitude, let longitude = trigger.longitude, let radius = trigger.radius else {
+            geofenceCapabilityStatus = .unavailable(message: fallbackMessage)
+            return
+        }
+        do {
+            let acceptedRadius = try geofence.register(
+                triggerId: trigger.id,
+                latitude: latitude,
+                longitude: longitude,
+                radius: radius
+            )
+            if acceptedRadius != trigger.radius {
+                trigger.radius = acceptedRadius
+                try activityRepository.save(trigger)
+            }
+            geofenceCapabilityStatus = .geofence(for: geofence.authorizationStatus)
+        } catch {
+            geofenceCapabilityStatus = .unavailable(message: fallbackMessage)
+        }
+    }
+
     private func normalizedPlaceName(_ name: String) -> String {
         let trimmed = name.trimmingCharacters(in: .whitespacesAndNewlines)
         return trimmed.isEmpty ? "工作地点" : trimmed
     }
 
     private func requestGeofenceNotificationAuthorization() {
-        Task { [notifications = self.notifications] in
-            _ = try? await notifications.requestAuthorization()
+        Task { @MainActor [weak self, notifications = self.notifications] in
+            do {
+                self?.notificationCapabilityStatus = try await notifications.requestAuthorization()
+                    ? .available : .needsAuthorization
+            } catch {
+                self?.notificationCapabilityStatus = .unavailable(message: "通知服务暂不可用")
+            }
         }
     }
 

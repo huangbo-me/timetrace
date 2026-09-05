@@ -4,12 +4,14 @@ import SwiftUI
 import UIKit
 
 struct SettingsView: View {
-    @EnvironmentObject private var model: AppModel
+    @EnvironmentObject private var store: SettingsFeatureStore
     @Environment(\.openURL) private var openURL
     @AppStorage("profileNickname") private var profileNickname = ""
     @State private var showingPlaces = false
     @State private var showingReminder = false
     @State private var showingICloudHelp = false
+
+    private var model: AppModel { store.application }
 #if DEBUG
     @AppStorage("developerDemoToolsEnabled") private var developerDemoToolsEnabled = false
     @State private var showingDemoResult = false
@@ -104,11 +106,18 @@ struct SettingsView: View {
                             Spacer()
                             Toggle("", isOn: .constant(true)).labelsHidden().disabled(true)
                         }
+                        if case .unavailable(let message) = model.geofenceCapabilityStatus {
+                            TTCapabilityNotice(message: message)
+                        }
                     }
                 }
 
                 TTSectionTitle(title: "活动提醒", action: "添加", onAction: { showingReminder = true })
                 TTCard {
+                    if case .unavailable(let message) = model.notificationCapabilityStatus {
+                        TTCapabilityNotice(message: message, systemImage: "bell.slash.fill")
+                        Divider()
+                    }
                     if model.reminders.isEmpty {
                         HStack { TTIcon(systemName: "bell.badge", tint: .orange); Text("尚未添加提醒").font(.subheadline).foregroundStyle(TimeTraceDesign.muted); Spacer() }
                     } else {
@@ -297,7 +306,7 @@ struct SettingsView: View {
 }
 
 struct WorkplaceEditorView: View {
-    @EnvironmentObject private var model: AppModel
+    @EnvironmentObject private var store: SettingsFeatureStore
     @Environment(\.dismiss) private var dismiss
     @State private var coordinate: CLLocationCoordinate2D
     @State private var position: MapCameraPosition
@@ -308,6 +317,8 @@ struct WorkplaceEditorView: View {
     @State private var usesReducedAccuracy = false
     @State private var showingDeleteConfirmation = false
     let trigger: ActivityTrigger?
+
+    private var model: AppModel { store.application }
 
     init(trigger: ActivityTrigger? = nil) {
         self.trigger = trigger
@@ -457,12 +468,14 @@ struct WorkplaceEditorView: View {
 }
 
 struct ReminderEditorView: View {
-    @EnvironmentObject private var model: AppModel
+    @EnvironmentObject private var store: SettingsFeatureStore
     @Environment(\.dismiss) private var dismiss
     @State private var name = ""
     @State private var type = ActivityType.custom
     @State private var time = Calendar.current.date(from: DateComponents(hour: 21)) ?? Date()
     @State private var weekdaysMask = 0b1111111
+
+    private var model: AppModel { store.application }
 
     var body: some View {
         NavigationStack {

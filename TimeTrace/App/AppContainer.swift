@@ -15,7 +15,11 @@ final class AppContainer: ObservableObject {
     let history: HistoryFeatureStore
     let settings: SettingsFeatureStore
 
-    init(application: AppModel = AppModel()) {
+    convenience init() {
+        self.init(application: AppModel())
+    }
+
+    init(application: AppModel) {
         self.application = application
         root = RootStore(application: application)
         onboarding = OnboardingFeatureStore(application: application)

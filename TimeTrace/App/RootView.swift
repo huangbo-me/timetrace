@@ -1,14 +1,15 @@
 import SwiftUI
 
 struct RootView: View {
-    @EnvironmentObject private var model: AppModel
+    @EnvironmentObject private var store: RootStore
     @State private var selectedTab = ProcessInfo.processInfo.arguments.contains("--history-validation") ? "history" : "today"
 
     var body: some View {
+        let state = store.state
         Group {
-            if !model.isLoaded {
-                ProgressView(model.isRestoringICloudData ? "正在从 iCloud 恢复数据…" : "正在读取本地数据…")
-            } else if !model.isOnboarded {
+            if !state.isLoaded {
+                ProgressView(state.isRestoringICloudData ? "正在从 iCloud 恢复数据…" : "正在读取本地数据…")
+            } else if !state.isOnboarded {
                 OnboardingView()
             } else {
                 TabView(selection: $selectedTab) {
@@ -52,12 +53,12 @@ struct RootView: View {
             }
         }
         .alert("出现问题", isPresented: Binding(
-            get: { model.lastError != nil },
-            set: { if !$0 { model.lastError = nil } }
+            get: { store.state.errorMessage != nil },
+            set: { if !$0 { store.dismissError() } }
         )) {
-            Button("好", role: .cancel) { model.lastError = nil }
+            Button("好", role: .cancel) { store.dismissError() }
         } message: {
-            Text(model.lastError ?? "未知错误")
+            Text(store.state.errorMessage ?? "未知错误")
         }
     }
 }

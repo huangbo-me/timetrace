@@ -1,13 +1,15 @@
 import SwiftUI
 
 struct HistoryView: View {
-    @EnvironmentObject private var model: AppModel
+    @EnvironmentObject private var store: HistoryFeatureStore
     @State private var repairingEvent: ActivityEvent?
     @State private var selectedSummary: DailyActivitySummary?
     @State private var addingSession = false
     @State private var displayedHistoryCount = 12
 
     private let historyPageSize = 12
+
+    private var model: AppModel { store.application }
 
     var body: some View {
         // A session belongs to exactly one group: pending completion, active, or
@@ -699,13 +701,15 @@ private struct MasonryLayout: Layout {
 }
 
 struct EditSessionView: View {
-    @EnvironmentObject private var model: AppModel
+    @EnvironmentObject private var store: HistoryFeatureStore
     @Environment(\.dismiss) private var dismiss
     let session: ActivitySession
     @State private var startAt: Date
     @State private var endAt: Date
     @State private var hasEnd: Bool
     @State private var confirmingDeletion = false
+
+    private var model: AppModel { store.application }
 
     init(session: ActivitySession) {
         self.session = session
@@ -760,10 +764,12 @@ struct EditSessionView: View {
 }
 
 struct RepairOrphanedExitView: View {
-    @EnvironmentObject private var model: AppModel
+    @EnvironmentObject private var store: HistoryFeatureStore
     @Environment(\.dismiss) private var dismiss
     let event: ActivityEvent
     @State private var startAt: Date
+
+    private var model: AppModel { store.application }
 
     init(event: ActivityEvent) {
         self.event = event
@@ -808,10 +814,12 @@ struct RepairOrphanedExitView: View {
 }
 
 struct AddSessionView: View {
-    @EnvironmentObject private var model: AppModel
+    @EnvironmentObject private var store: HistoryFeatureStore
     @Environment(\.dismiss) private var dismiss
     @State private var startAt = Date().addingTimeInterval(-3600)
     @State private var endAt = Date()
+
+    private var model: AppModel { store.application }
 
     var body: some View {
         NavigationStack {
