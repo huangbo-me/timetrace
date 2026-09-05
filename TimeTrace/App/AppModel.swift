@@ -899,6 +899,7 @@ final class AppModel: ObservableObject {
             let activityId = trigger.activityId
             var metadata = timeZoneMetadata()
             metadata.values["placeTriggerId"] = trigger.id.uuidString
+            metadata.values["placeType"] = trigger.placeType.rawValue
             _ = try pipeline.ingest(ActivityEvent(activityId: activityId, eventType: type,
                                                   timestamp: timestamp, source: .coreLocation,
                                                   metadata: metadata),

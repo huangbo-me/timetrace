@@ -68,6 +68,19 @@ final class ActivitySessionEngineTests: XCTestCase {
         XCTAssertNil(result.sessions[0].endAt)
     }
 
+    func testNonWorkPlaceCanRemainActiveAcrossMultipleDays() {
+        let home = ActivityEvent(
+            activityId: activityId,
+            eventType: .geofenceEnter,
+            timestamp: date(day: 1, hour: 9),
+            source: .coreLocation,
+            metadata: EventMetadata(values: ["placeType": PlaceType.home.rawValue])
+        )
+        let result = engine.reconcile(events: [home], existingSessions: [], now: date(day: 4, hour: 10))
+        XCTAssertEqual(result.sessions[0].status, .active)
+        XCTAssertNil(result.sessions[0].endAt)
+    }
+
     func testExitAfter24HoursIsOrphanedAndDoesNotInventAnEnd() {
         let start = event(.geofenceEnter, 9)
         let lateExit = ActivityEvent(activityId: activityId, eventType: .geofenceExit,

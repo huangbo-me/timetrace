@@ -38,7 +38,7 @@ struct ActivitySessionEngine {
         }
 
         enum Active {
-            case automatic(ActivitySession, ActivityEvent)
+            case automatic(ActivitySession, ActivityEvent, allowsExtendedDuration: Bool)
             case preserved(ActivitySession)
         }
 
@@ -47,13 +47,14 @@ struct ActivitySessionEngine {
 
         for event in ordered {
             if let currentActive = active {
-                let start: Date
+                let start: Date?
                 switch currentActive {
-                case .automatic(_, let startEvent): start = startEvent.timestamp
+                case .automatic(_, let startEvent, let allowsExtendedDuration):
+                    start = allowsExtendedDuration ? nil : startEvent.timestamp
                 case .preserved(let session): start = session.startAt
                 }
-                if event.timestamp.timeIntervalSince(start) >= Self.staleInterval {
-                    if case .automatic(let session, _) = currentActive {
+                if let start, event.timestamp.timeIntervalSince(start) >= Self.staleInterval {
+                    if case .automatic(let session, _, _) = currentActive {
                         session.endAt = nil
                         session.endEventId = nil
                         session.status = .incomplete
@@ -82,6 +83,7 @@ struct ActivitySessionEngine {
                     continue
                 }
                 let isManual = event.eventType == .manualStart || event.source == .user
+                let allowsExtendedDuration = allowsExtendedDuration(for: event)
                 let session: ActivitySession
                 if let existing = automaticByStart[event.id] {
                     session = existing
@@ -106,14 +108,14 @@ struct ActivitySessionEngine {
                     created.append(session)
                 }
                 event.disposition = .applied
-                active = .automatic(session, event)
+                active = .automatic(session, event, allowsExtendedDuration: allowsExtendedDuration)
             } else if event.eventType.stopsSession {
                 guard let current = active else {
                     event.disposition = .orphaned
                     continue
                 }
                 switch current {
-                case .automatic(let session, let startEvent):
+                case .automatic(let session, let startEvent, _):
                     guard event.timestamp >= startEvent.timestamp else {
                         event.disposition = .orphaned
                         continue
@@ -134,8 +136,8 @@ struct ActivitySessionEngine {
             }
         }
 
-        if case .automatic(let session, let startEvent) = active {
-            if now.timeIntervalSince(startEvent.timestamp) >= Self.staleInterval {
+        if case .automatic(let session, let startEvent, let allowsExtendedDuration) = active {
+            if !allowsExtendedDuration && now.timeIntervalSince(startEvent.timestamp) >= Self.staleInterval {
                 session.status = .incomplete
                 session.confidence = .uncertain
             } else if session.status != .manuallyAdjusted {
@@ -147,6 +149,12 @@ struct ActivitySessionEngine {
         applyUserCorrections(from: ordered, to: existingSessions + created, now: now)
 
         return SessionEngineResult(sessions: existingSessions + created, createdSessions: created)
+    }
+
+    private func allowsExtendedDuration(for event: ActivityEvent) -> Bool {
+        guard event.eventType == .geofenceEnter else { return false }
+        let placeType = event.metadata.values["placeType"].flatMap(PlaceType.init(rawValue:))
+        return placeType.map { $0 != .work } ?? false
     }
 
     /// Session records are a projection of immutable activity events.  User

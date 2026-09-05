@@ -11,6 +11,18 @@ final class RepositoryTests: XCTestCase {
         XCTAssertEqual(TimeTraceLocalization.locale.language.script?.identifier, "Hans")
     }
 
+    func testWeekendNonWorkPlaceUsesActivityPresentationRatherThanOvertime() {
+        XCTAssertEqual(
+            TodayWorkdayRule.mode(
+                isWorkday: false,
+                activePlaceType: .exercise,
+                hasRecordedWork: false,
+                hasRecordedActivity: true
+            ),
+            .activeActivity
+        )
+    }
+
     func testValueMapperDetachesPresentationDataFromSwiftDataRecord() {
         let activity = ActivityDefinition(name: "工作", type: .work)
         let trigger = ActivityTrigger(
