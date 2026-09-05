@@ -8,11 +8,9 @@
 
 ## 界面预览
 
-<p align="center">
-  <img src="AppStoreAssets/01-places.png" alt="地点管理与地图" width="31%" />
-  <img src="AppStoreAssets/03-history.png" alt="历史记录" width="31%" />
-  <img src="AppStoreAssets/05-settings.png" alt="设置" width="31%" />
-</p>
+| 地点管理与地图 | 历史记录 | 设置 |
+| --- | --- | --- |
+| ![地点管理与地图](AppStoreAssets/01-places.png) | ![历史记录](AppStoreAssets/03-history.png) | ![设置](AppStoreAssets/05-settings.png) |
 
 ## 功能
 
