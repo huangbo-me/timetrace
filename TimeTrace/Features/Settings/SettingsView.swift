@@ -184,7 +184,7 @@ struct SettingsView: View {
             .padding(.bottom, 28)
         }
         .timeTraceScreen()
-        .toolbar(.hidden, for: .navigationBar)
+        .timeTraceTabTitle("设置")
         .sheet(isPresented: $showingPlaces) { PlacesView() }
         .sheet(isPresented: $showingReminder) { ReminderEditorView() }
         .alert("开启 iCloud 同步", isPresented: $showingICloudHelp) {

@@ -89,7 +89,7 @@ struct TodayView: View {
                 .padding(.top, 12)
             }
             .timeTraceScreen()
-            .toolbar(.hidden, for: .navigationBar)
+            .timeTraceTabTitle("今天")
         }
     }
 

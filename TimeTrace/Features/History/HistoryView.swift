@@ -30,7 +30,6 @@ struct HistoryView: View {
             VStack(alignment: .leading, spacing: 16) {
                 HStack {
                     VStack(alignment: .leading, spacing: 3) {
-                        Text("历史记录").font(.largeTitle.weight(.bold))
                         Text("过去的每一天都值得回顾").font(.subheadline).foregroundStyle(TimeTraceDesign.muted)
                     }
                     Spacer()
@@ -117,7 +116,7 @@ struct HistoryView: View {
             .padding(.top, 12)
         }
         .timeTraceScreen()
-        .toolbar(.hidden, for: .navigationBar)
+        .timeTraceTabTitle("历史记录")
         .sheet(item: $repairingEvent) { RepairOrphanedExitView(event: $0) }
         .sheet(item: $selectedSummary) { HistoryDayDetailView(summary: $0, origins: origins) }
         .sheet(isPresented: $addingSession) { AddSessionView() }

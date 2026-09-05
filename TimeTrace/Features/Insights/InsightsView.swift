@@ -15,7 +15,6 @@ struct InsightsView: View {
         ScrollView(showsIndicators: false) {
             VStack(alignment: .leading, spacing: 18) {
                 VStack(alignment: .leading, spacing: 3) {
-                    Text("统计").font(.largeTitle.weight(.bold))
                     Text(rangeDescription).font(.subheadline).foregroundStyle(TimeTraceDesign.muted)
                 }
 
@@ -119,7 +118,7 @@ struct InsightsView: View {
             .padding(.bottom, 28)
         }
         .timeTraceScreen()
-        .toolbar(.hidden, for: .navigationBar)
+        .timeTraceTabTitle("统计")
     }
 
     private func overview(_ summary: PeriodActivitySummary) -> some View {

@@ -26,7 +26,6 @@ struct PlacesView: View {
         ScrollView(showsIndicators: false) {
             VStack(alignment: .leading, spacing: 18) {
                 HStack {
-                    Text("地点").font(.largeTitle.weight(.bold))
                     Spacer()
                     Button {
                         editorTarget = .add
@@ -125,6 +124,7 @@ struct PlacesView: View {
             .padding(.horizontal, 20)
         }
         .timeTraceScreen()
+        .timeTraceTabTitle("地点")
         .sheet(item: $editorTarget) { target in
             switch target {
             case .add:

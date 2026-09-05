@@ -114,4 +114,12 @@ extension View {
             .foregroundStyle(TimeTraceDesign.ink)
             .background(TimeTraceDesign.canvas.ignoresSafeArea())
     }
+
+    /// Uses iOS's native large-title behavior: the title is large at the
+    /// scroll edge and smoothly contracts into the navigation bar on scroll.
+    func timeTraceTabTitle(_ title: String) -> some View {
+        self
+            .navigationTitle(title)
+            .toolbarTitleDisplayMode(.large)
+    }
 }
