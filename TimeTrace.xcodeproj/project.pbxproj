@@ -1,0 +1,577 @@
+// !$*UTF8*$!
+{
+	archiveVersion = 1;
+	classes = {
+	};
+	objectVersion = 54;
+	objects = {
+
+/* Begin PBXBuildFile section */
+		02F3DEFDD3CDAEF7E6D5327A /* EventPipeline.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0B557414C3A11F00AEC7E482 /* EventPipeline.swift */; };
+		04A4C121411A47B299299592 /* Assets.xcassets in Resources */ = {isa = PBXBuildFile; fileRef = 7F6C610BB7F64BCBA05DD1A4 /* Assets.xcassets */; };
+		0780573C75AE56C44D0C1D5F /* AnalyticsService.swift in Sources */ = {isa = PBXBuildFile; fileRef = 347A64E6514960F2EBCA0A3F /* AnalyticsService.swift */; };
+		0789BC4A055BC967818A77ED /* TodayView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 3A81819DE2BCF9B5760AC4EA /* TodayView.swift */; };
+		111D22D7C718FD3D6CB361B7 /* HistoryView.swift in Sources */ = {isa = PBXBuildFile; fileRef = DE8E27F7BDEB591D26B8DCE0 /* HistoryView.swift */; };
+		172BC73ED37386F1886E44F1 /* OnboardingView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 58DA95C57AFB8C79AE737E1C /* OnboardingView.swift */; };
+		1A2407FAB81AF203130FBCEE /* InsightsView.swift in Sources */ = {isa = PBXBuildFile; fileRef = CF38E3E3DE3C88A18B8978E6 /* InsightsView.swift */; };
+		2A0D517EEEF6B1183BC271E8 /* ScreenTimeService.swift in Sources */ = {isa = PBXBuildFile; fileRef = 692323AD0A8F0CED1BB1E381 /* ScreenTimeService.swift */; };
+		A41C9B000000000000000001 /* TimeTraceDesign.swift in Sources */ = {isa = PBXBuildFile; fileRef = A41C9B000000000000000003 /* TimeTraceDesign.swift */; };
+		A41C9B000000000000000002 /* PlacesView.swift in Sources */ = {isa = PBXBuildFile; fileRef = A41C9B000000000000000004 /* PlacesView.swift */; };
+		A41C9B000000000000000007 /* ChinaWorkCalendar.swift in Sources */ = {isa = PBXBuildFile; fileRef = A41C9B000000000000000008 /* ChinaWorkCalendar.swift */; };
+		4ABD4097606445DB6ECCE8D7 /* RepositoryTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 6F1A3EEEAF54AB2BC1FB61CC /* RepositoryTests.swift */; };
+		581F4BFD3D6732DBD5F50865 /* SettingsView.swift in Sources */ = {isa = PBXBuildFile; fileRef = F1708C60FEB722FF3C8FCBB9 /* SettingsView.swift */; };
+		775DB53DB71B1E75FCE67640 /* TimeTraceApp.swift in Sources */ = {isa = PBXBuildFile; fileRef = 111335E20644ED4A05943CB7 /* TimeTraceApp.swift */; };
+		8B668B4043C7846102F1CF72 /* Formatting.swift in Sources */ = {isa = PBXBuildFile; fileRef = 50BF84353EFFDAEE4393C589 /* Formatting.swift */; };
+		9D7D8F5A57013A39E1614331 /* PersistenceController.swift in Sources */ = {isa = PBXBuildFile; fileRef = 6F9F5F3ED602DC5E292B16FA /* PersistenceController.swift */; };
+		A25A6C9549869202CACCBAEA /* AppModel.swift in Sources */ = {isa = PBXBuildFile; fileRef = E261511880CDE5907F47553E /* AppModel.swift */; };
+		A2EA5D1372C7D2B8FA35614C /* SwiftDataRepositories.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4D436F51DCDC19B6FABFE1C1 /* SwiftDataRepositories.swift */; };
+		A96C5021CD2FC8659A855817 /* ActivitySessionEngine.swift in Sources */ = {isa = PBXBuildFile; fileRef = 314FEF693B1E9E843EA1627F /* ActivitySessionEngine.swift */; };
+		B4817055792A39952374C161 /* RootView.swift in Sources */ = {isa = PBXBuildFile; fileRef = FC21C2C427EF3ABA49E4FD97 /* RootView.swift */; };
+		CBF9D8836E0836824BBC8E05 /* GeofenceService.swift in Sources */ = {isa = PBXBuildFile; fileRef = 87A25759106371DFC12AE56B /* GeofenceService.swift */; };
+		D10A77E10000000000000001 /* Localizable.strings in Resources */ = {isa = PBXBuildFile; fileRef = D10A77E10000000000000003 /* Localizable.strings */; };
+		A41C9B000000000000000005 /* PrivacyInfo.xcprivacy in Resources */ = {isa = PBXBuildFile; fileRef = A41C9B000000000000000006 /* PrivacyInfo.xcprivacy */; };
+		D2D1A6847264FF905C2E5688 /* Models.swift in Sources */ = {isa = PBXBuildFile; fileRef = 957F045EC7316E8C5B2986DD /* Models.swift */; };
+		E5ACE6E379E892F0F7AF24B9 /* AnalyticsServiceTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = BD24C86CDBA6370EBAD05C8B /* AnalyticsServiceTests.swift */; };
+		E5CA9DD22D2E7E577F8F5166 /* Repositories.swift in Sources */ = {isa = PBXBuildFile; fileRef = FA051CBD13B8FE1C6BC6C0CF /* Repositories.swift */; };
+		E79530DECA05CC38167CB7C0 /* ActivitySessionEngineTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = B88436FEFD9ABF305B0A4F2E /* ActivitySessionEngineTests.swift */; };
+		EA05E34BAB96ED1DE3730B9E /* NotificationService.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1BD12114479E523E35118D2C /* NotificationService.swift */; };
+/* End PBXBuildFile section */
+
+/* Begin PBXContainerItemProxy section */
+		270F5A82F82BC9ADCBB6EF79 /* PBXContainerItemProxy */ = {
+			isa = PBXContainerItemProxy;
+			containerPortal = 0087E70B50012339537D34D3 /* Project object */;
+			proxyType = 1;
+			remoteGlobalIDString = 01F5F1EBE618382C4C964CDC;
+			remoteInfo = TimeTrace;
+		};
+/* End PBXContainerItemProxy section */
+
+/* Begin PBXFileReference section */
+		0B557414C3A11F00AEC7E482 /* EventPipeline.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; name = EventPipeline.swift; path = Services/EventPipeline.swift; sourceTree = "<group>"; };
+		7F6C610BB7F64BCBA05DD1A4 /* Assets.xcassets */ = {isa = PBXFileReference; lastKnownFileType = folder.assetcatalog; path = Assets.xcassets; sourceTree = "<group>"; };
+		111335E20644ED4A05943CB7 /* TimeTraceApp.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; name = TimeTraceApp.swift; path = App/TimeTraceApp.swift; sourceTree = "<group>"; };
+		1BD12114479E523E35118D2C /* NotificationService.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; name = NotificationService.swift; path = Services/NotificationService.swift; sourceTree = "<group>"; };
+		314FEF693B1E9E843EA1627F /* ActivitySessionEngine.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; name = ActivitySessionEngine.swift; path = Domain/ActivitySessionEngine.swift; sourceTree = "<group>"; };
+		347A64E6514960F2EBCA0A3F /* AnalyticsService.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; name = AnalyticsService.swift; path = Domain/AnalyticsService.swift; sourceTree = "<group>"; };
+		3A81819DE2BCF9B5760AC4EA /* TodayView.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; name = TodayView.swift; path = Features/Today/TodayView.swift; sourceTree = "<group>"; };
+		A41C9B000000000000000003 /* TimeTraceDesign.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; name = TimeTraceDesign.swift; path = Features/Shared/TimeTraceDesign.swift; sourceTree = "<group>"; };
+		A41C9B000000000000000004 /* PlacesView.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; name = PlacesView.swift; path = Features/Places/PlacesView.swift; sourceTree = "<group>"; };
+		A41C9B000000000000000006 /* PrivacyInfo.xcprivacy */ = {isa = PBXFileReference; lastKnownFileType = text.plist.xml; path = PrivacyInfo.xcprivacy; sourceTree = "<group>"; };
+		A41C9B000000000000000008 /* ChinaWorkCalendar.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = App/ChinaWorkCalendar.swift; sourceTree = "<group>"; };
+		4D436F51DCDC19B6FABFE1C1 /* SwiftDataRepositories.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; name = SwiftDataRepositories.swift; path = Persistence/SwiftDataRepositories.swift; sourceTree = "<group>"; };
+		50BF84353EFFDAEE4393C589 /* Formatting.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; name = Formatting.swift; path = Features/Shared/Formatting.swift; sourceTree = "<group>"; };
+		58DA95C57AFB8C79AE737E1C /* OnboardingView.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; name = OnboardingView.swift; path = Features/Onboarding/OnboardingView.swift; sourceTree = "<group>"; };
+		692323AD0A8F0CED1BB1E381 /* ScreenTimeService.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; name = ScreenTimeService.swift; path = Services/ScreenTimeService.swift; sourceTree = "<group>"; };
+		6F1A3EEEAF54AB2BC1FB61CC /* RepositoryTests.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = RepositoryTests.swift; sourceTree = "<group>"; };
+		6F9F5F3ED602DC5E292B16FA /* PersistenceController.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; name = PersistenceController.swift; path = Persistence/PersistenceController.swift; sourceTree = "<group>"; };
+		7BD1D6E2BA8D7BBA277CE00A /* TimeTrace.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = TimeTrace.app; sourceTree = BUILT_PRODUCTS_DIR; };
+		87A25759106371DFC12AE56B /* GeofenceService.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; name = GeofenceService.swift; path = Services/GeofenceService.swift; sourceTree = "<group>"; };
+		957F045EC7316E8C5B2986DD /* Models.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; name = Models.swift; path = Domain/Models.swift; sourceTree = "<group>"; };
+		B88436FEFD9ABF305B0A4F2E /* ActivitySessionEngineTests.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = ActivitySessionEngineTests.swift; sourceTree = "<group>"; };
+		BD24C86CDBA6370EBAD05C8B /* AnalyticsServiceTests.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = AnalyticsServiceTests.swift; sourceTree = "<group>"; };
+		CF38E3E3DE3C88A18B8978E6 /* InsightsView.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; name = InsightsView.swift; path = Features/Insights/InsightsView.swift; sourceTree = "<group>"; };
+		D10A77E10000000000000002 /* zh-Hans */ = {isa = PBXFileReference; lastKnownFileType = text.plist.strings; name = "zh-Hans"; path = "zh-Hans.lproj/Localizable.strings"; sourceTree = "<group>"; };
+		DE8E27F7BDEB591D26B8DCE0 /* HistoryView.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; name = HistoryView.swift; path = Features/History/HistoryView.swift; sourceTree = "<group>"; };
+		E261511880CDE5907F47553E /* AppModel.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; name = AppModel.swift; path = App/AppModel.swift; sourceTree = "<group>"; };
+		F1708C60FEB722FF3C8FCBB9 /* SettingsView.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; name = SettingsView.swift; path = Features/Settings/SettingsView.swift; sourceTree = "<group>"; };
+		FA051CBD13B8FE1C6BC6C0CF /* Repositories.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; name = Repositories.swift; path = Domain/Repositories.swift; sourceTree = "<group>"; };
+		FC21C2C427EF3ABA49E4FD97 /* RootView.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; name = RootView.swift; path = App/RootView.swift; sourceTree = "<group>"; };
+		FFA12FB05A9EF3B7EA35BB97 /* TimeTraceTests.xctest */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = TimeTraceTests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
+/* End PBXFileReference section */
+
+/* Begin PBXFrameworksBuildPhase section */
+		BC543302D754EE9E5E74018C /* Frameworks */ = {
+			isa = PBXFrameworksBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+		C35F7808DB649BCFCD5B9E1D /* Frameworks */ = {
+			isa = PBXFrameworksBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+/* End PBXFrameworksBuildPhase section */
+
+/* Begin PBXGroup section */
+		351DBED3CBD0F4A48E9682E3 /* Frameworks */ = {
+			isa = PBXGroup;
+			children = (
+				AD9DE87CD07F55B547135E17 /* iOS */,
+			);
+			name = Frameworks;
+			sourceTree = "<group>";
+		};
+		430D302224CCB0E8A55B6A68 /* Products */ = {
+			isa = PBXGroup;
+			children = (
+				7BD1D6E2BA8D7BBA277CE00A /* TimeTrace.app */,
+				FFA12FB05A9EF3B7EA35BB97 /* TimeTraceTests.xctest */,
+			);
+			name = Products;
+			sourceTree = "<group>";
+		};
+		93AEDDA010A874CAE362684C = {
+			isa = PBXGroup;
+			children = (
+				430D302224CCB0E8A55B6A68 /* Products */,
+				351DBED3CBD0F4A48E9682E3 /* Frameworks */,
+				B89D5997ED35BFB597FBEDD9 /* TimeTrace */,
+				C7F6C56D0121B4553D3CBAFC /* TimeTraceTests */,
+			);
+			sourceTree = "<group>";
+		};
+		AD9DE87CD07F55B547135E17 /* iOS */ = {
+			isa = PBXGroup;
+			children = (
+			);
+			name = iOS;
+			sourceTree = "<group>";
+		};
+		B89D5997ED35BFB597FBEDD9 /* TimeTrace */ = {
+			isa = PBXGroup;
+			children = (
+				7F6C610BB7F64BCBA05DD1A4 /* Assets.xcassets */,
+				A41C9B000000000000000006 /* PrivacyInfo.xcprivacy */,
+				A41C9B000000000000000008 /* ChinaWorkCalendar.swift */,
+				D10A77E10000000000000003 /* Localizable.strings */,
+				E261511880CDE5907F47553E /* AppModel.swift */,
+				FC21C2C427EF3ABA49E4FD97 /* RootView.swift */,
+				111335E20644ED4A05943CB7 /* TimeTraceApp.swift */,
+				314FEF693B1E9E843EA1627F /* ActivitySessionEngine.swift */,
+				347A64E6514960F2EBCA0A3F /* AnalyticsService.swift */,
+				957F045EC7316E8C5B2986DD /* Models.swift */,
+				FA051CBD13B8FE1C6BC6C0CF /* Repositories.swift */,
+				DE8E27F7BDEB591D26B8DCE0 /* HistoryView.swift */,
+				CF38E3E3DE3C88A18B8978E6 /* InsightsView.swift */,
+				58DA95C57AFB8C79AE737E1C /* OnboardingView.swift */,
+				F1708C60FEB722FF3C8FCBB9 /* SettingsView.swift */,
+				50BF84353EFFDAEE4393C589 /* Formatting.swift */,
+				A41C9B000000000000000003 /* TimeTraceDesign.swift */,
+				3A81819DE2BCF9B5760AC4EA /* TodayView.swift */,
+				A41C9B000000000000000004 /* PlacesView.swift */,
+				6F9F5F3ED602DC5E292B16FA /* PersistenceController.swift */,
+				4D436F51DCDC19B6FABFE1C1 /* SwiftDataRepositories.swift */,
+				0B557414C3A11F00AEC7E482 /* EventPipeline.swift */,
+				87A25759106371DFC12AE56B /* GeofenceService.swift */,
+				1BD12114479E523E35118D2C /* NotificationService.swift */,
+				692323AD0A8F0CED1BB1E381 /* ScreenTimeService.swift */,
+			);
+			path = TimeTrace;
+			sourceTree = "<group>";
+		};
+		C7F6C56D0121B4553D3CBAFC /* TimeTraceTests */ = {
+			isa = PBXGroup;
+			children = (
+				B88436FEFD9ABF305B0A4F2E /* ActivitySessionEngineTests.swift */,
+				BD24C86CDBA6370EBAD05C8B /* AnalyticsServiceTests.swift */,
+				6F1A3EEEAF54AB2BC1FB61CC /* RepositoryTests.swift */,
+			);
+			path = TimeTraceTests;
+			sourceTree = "<group>";
+		};
+/* End PBXGroup section */
+
+/* Begin PBXVariantGroup section */
+		D10A77E10000000000000003 /* Localizable.strings */ = {
+			isa = PBXVariantGroup;
+			children = (
+				D10A77E10000000000000002 /* zh-Hans */,
+			);
+			name = Localizable.strings;
+			sourceTree = "<group>";
+		};
+/* End PBXVariantGroup section */
+
+/* Begin PBXNativeTarget section */
+		01F5F1EBE618382C4C964CDC /* TimeTrace */ = {
+			isa = PBXNativeTarget;
+			buildConfigurationList = BF8BF58B87876B31C6B99187 /* Build configuration list for PBXNativeTarget "TimeTrace" */;
+			buildPhases = (
+				31A2276D909E6DE3CD3EF942 /* Sources */,
+				BC543302D754EE9E5E74018C /* Frameworks */,
+				4700FF264DB48B82E88EA5C1 /* Resources */,
+			);
+			buildRules = (
+			);
+			dependencies = (
+			);
+			name = TimeTrace;
+			productName = TimeTrace;
+			productReference = 7BD1D6E2BA8D7BBA277CE00A /* TimeTrace.app */;
+			productType = "com.apple.product-type.application";
+		};
+		2B51F9E045B9B0D161EF3762 /* TimeTraceTests */ = {
+			isa = PBXNativeTarget;
+			buildConfigurationList = 21E58AEECBD15E1D1F5205A2 /* Build configuration list for PBXNativeTarget "TimeTraceTests" */;
+			buildPhases = (
+				45724F310F80B9FD4FE00928 /* Sources */,
+				C35F7808DB649BCFCD5B9E1D /* Frameworks */,
+				EBD4569B6BD61D04EF1E2A71 /* Resources */,
+			);
+			buildRules = (
+			);
+			dependencies = (
+				E4EF2303AB9610E78FD61837 /* PBXTargetDependency */,
+			);
+			name = TimeTraceTests;
+			productName = TimeTraceTests;
+			productReference = FFA12FB05A9EF3B7EA35BB97 /* TimeTraceTests.xctest */;
+			productType = "com.apple.product-type.bundle.unit-test";
+		};
+/* End PBXNativeTarget section */
+
+/* Begin PBXProject section */
+		0087E70B50012339537D34D3 /* Project object */ = {
+			isa = PBXProject;
+			attributes = {
+				BuildIndependentTargetsInParallel = YES;
+				LastSwiftUpdateCheck = 1600;
+				LastUpgradeCheck = 2640;
+			};
+			buildConfigurationList = 0EF0A48B907E852A3E71C0FE /* Build configuration list for PBXProject "TimeTrace" */;
+			compatibilityVersion = "Xcode 3.2";
+			developmentRegion = "zh-Hans";
+			hasScannedForEncodings = 0;
+			knownRegions = (
+				"zh-Hans",
+				Base,
+			);
+			mainGroup = 93AEDDA010A874CAE362684C;
+			productRefGroup = 430D302224CCB0E8A55B6A68 /* Products */;
+			projectDirPath = "";
+			projectRoot = "";
+			targets = (
+				01F5F1EBE618382C4C964CDC /* TimeTrace */,
+				2B51F9E045B9B0D161EF3762 /* TimeTraceTests */,
+			);
+		};
+/* End PBXProject section */
+
+/* Begin PBXResourcesBuildPhase section */
+		4700FF264DB48B82E88EA5C1 /* Resources */ = {
+			isa = PBXResourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				04A4C121411A47B299299592 /* Assets.xcassets in Resources */,
+				A41C9B000000000000000005 /* PrivacyInfo.xcprivacy in Resources */,
+				D10A77E10000000000000001 /* Localizable.strings in Resources */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+		EBD4569B6BD61D04EF1E2A71 /* Resources */ = {
+			isa = PBXResourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+/* End PBXResourcesBuildPhase section */
+
+/* Begin PBXSourcesBuildPhase section */
+		31A2276D909E6DE3CD3EF942 /* Sources */ = {
+			isa = PBXSourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				A25A6C9549869202CACCBAEA /* AppModel.swift in Sources */,
+				B4817055792A39952374C161 /* RootView.swift in Sources */,
+				775DB53DB71B1E75FCE67640 /* TimeTraceApp.swift in Sources */,
+				A96C5021CD2FC8659A855817 /* ActivitySessionEngine.swift in Sources */,
+				0780573C75AE56C44D0C1D5F /* AnalyticsService.swift in Sources */,
+				D2D1A6847264FF905C2E5688 /* Models.swift in Sources */,
+				E5CA9DD22D2E7E577F8F5166 /* Repositories.swift in Sources */,
+				111D22D7C718FD3D6CB361B7 /* HistoryView.swift in Sources */,
+				1A2407FAB81AF203130FBCEE /* InsightsView.swift in Sources */,
+				172BC73ED37386F1886E44F1 /* OnboardingView.swift in Sources */,
+				581F4BFD3D6732DBD5F50865 /* SettingsView.swift in Sources */,
+				8B668B4043C7846102F1CF72 /* Formatting.swift in Sources */,
+				A41C9B000000000000000001 /* TimeTraceDesign.swift in Sources */,
+				0789BC4A055BC967818A77ED /* TodayView.swift in Sources */,
+				A41C9B000000000000000002 /* PlacesView.swift in Sources */,
+				A41C9B000000000000000007 /* ChinaWorkCalendar.swift in Sources */,
+				9D7D8F5A57013A39E1614331 /* PersistenceController.swift in Sources */,
+				A2EA5D1372C7D2B8FA35614C /* SwiftDataRepositories.swift in Sources */,
+				02F3DEFDD3CDAEF7E6D5327A /* EventPipeline.swift in Sources */,
+				CBF9D8836E0836824BBC8E05 /* GeofenceService.swift in Sources */,
+				EA05E34BAB96ED1DE3730B9E /* NotificationService.swift in Sources */,
+				2A0D517EEEF6B1183BC271E8 /* ScreenTimeService.swift in Sources */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+		45724F310F80B9FD4FE00928 /* Sources */ = {
+			isa = PBXSourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				E79530DECA05CC38167CB7C0 /* ActivitySessionEngineTests.swift in Sources */,
+				E5ACE6E379E892F0F7AF24B9 /* AnalyticsServiceTests.swift in Sources */,
+				4ABD4097606445DB6ECCE8D7 /* RepositoryTests.swift in Sources */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+/* End PBXSourcesBuildPhase section */
+
+/* Begin PBXTargetDependency section */
+		E4EF2303AB9610E78FD61837 /* PBXTargetDependency */ = {
+			isa = PBXTargetDependency;
+			name = TimeTrace;
+			target = 01F5F1EBE618382C4C964CDC /* TimeTrace */;
+			targetProxy = 270F5A82F82BC9ADCBB6EF79 /* PBXContainerItemProxy */;
+		};
+/* End PBXTargetDependency section */
+
+/* Begin XCBuildConfiguration section */
+		1F6110EE8BC163E35C44D0E1 /* Debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
+				ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME = AccentColor;
+				CLANG_ENABLE_OBJC_WEAK = NO;
+				CODE_SIGN_STYLE = Automatic;
+				CURRENT_PROJECT_VERSION = 1;
+				CODE_SIGN_ENTITLEMENTS = TimeTrace/TimeTrace.entitlements;
+				DEVELOPMENT_TEAM = SG3N92JMS5;
+				GENERATE_INFOPLIST_FILE = NO;
+				INFOPLIST_FILE = TimeTrace/Info.plist;
+				INFOPLIST_KEY_CFBundleDisplayName = TimeTrace;
+				INFOPLIST_KEY_NSLocationAlwaysAndWhenInUseUsageDescription = "用于在后台自动记录进入和离开公司。";
+				INFOPLIST_KEY_NSLocationWhenInUseUsageDescription = "用于设置公司位置并监测围栏进出。";
+				INFOPLIST_KEY_UIApplicationSceneManifest_Generation = YES;
+				INFOPLIST_KEY_UILaunchScreen_Generation = YES;
+				IPHONEOS_DEPLOYMENT_TARGET = 26.0;
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/Frameworks",
+				);
+				MARKETING_VERSION = 1.0;
+				PRODUCT_BUNDLE_IDENTIFIER = com.chronora.time.trace;
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SDKROOT = iphoneos;
+				SUPPORTED_PLATFORMS = "iphoneos iphonesimulator";
+				TARGETED_DEVICE_FAMILY = 1;
+			};
+			name = Debug;
+		};
+		4E80594714C74ACB09CB7B51 /* Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ALWAYS_SEARCH_USER_PATHS = NO;
+				CLANG_ANALYZER_NONNULL = YES;
+				CLANG_ANALYZER_NUMBER_OBJECT_CONVERSION = YES_AGGRESSIVE;
+				CLANG_CXX_LANGUAGE_STANDARD = "gnu++14";
+				CLANG_CXX_LIBRARY = "libc++";
+				CLANG_ENABLE_MODULES = YES;
+				CLANG_ENABLE_OBJC_ARC = YES;
+				CLANG_ENABLE_OBJC_WEAK = YES;
+				CLANG_WARN_BLOCK_CAPTURE_AUTORELEASING = YES;
+				CLANG_WARN_BOOL_CONVERSION = YES;
+				CLANG_WARN_COMMA = YES;
+				CLANG_WARN_CONSTANT_CONVERSION = YES;
+				CLANG_WARN_DEPRECATED_OBJC_IMPLEMENTATIONS = YES;
+				CLANG_WARN_DIRECT_OBJC_ISA_USAGE = YES_ERROR;
+				CLANG_WARN_DOCUMENTATION_COMMENTS = YES;
+				CLANG_WARN_EMPTY_BODY = YES;
+				CLANG_WARN_ENUM_CONVERSION = YES;
+				CLANG_WARN_INFINITE_RECURSION = YES;
+				CLANG_WARN_INT_CONVERSION = YES;
+				CLANG_WARN_NON_LITERAL_NULL_CONVERSION = YES;
+				CLANG_WARN_OBJC_IMPLICIT_RETAIN_SELF = YES;
+				CLANG_WARN_OBJC_LITERAL_CONVERSION = YES;
+				CLANG_WARN_OBJC_ROOT_CLASS = YES_ERROR;
+				CLANG_WARN_QUOTED_INCLUDE_IN_FRAMEWORK_HEADER = YES;
+				CLANG_WARN_RANGE_LOOP_ANALYSIS = YES;
+				CLANG_WARN_STRICT_PROTOTYPES = YES;
+				CLANG_WARN_SUSPICIOUS_MOVE = YES;
+				CLANG_WARN_UNGUARDED_AVAILABILITY = YES_AGGRESSIVE;
+				CLANG_WARN_UNREACHABLE_CODE = YES;
+				CLANG_WARN__DUPLICATE_METHOD_MATCH = YES;
+				COPY_PHASE_STRIP = NO;
+				DEAD_CODE_STRIPPING = YES;
+				DEBUG_INFORMATION_FORMAT = "dwarf-with-dsym";
+				ENABLE_NS_ASSERTIONS = NO;
+				ENABLE_STRICT_OBJC_MSGSEND = YES;
+				ENABLE_USER_SCRIPT_SANDBOXING = YES;
+				GCC_C_LANGUAGE_STANDARD = gnu11;
+				GCC_NO_COMMON_BLOCKS = YES;
+				GCC_WARN_64_TO_32_BIT_CONVERSION = YES;
+				GCC_WARN_ABOUT_RETURN_TYPE = YES_ERROR;
+				GCC_WARN_UNDECLARED_SELECTOR = YES;
+				GCC_WARN_UNINITIALIZED_AUTOS = YES_AGGRESSIVE;
+				GCC_WARN_UNUSED_FUNCTION = YES;
+				GCC_WARN_UNUSED_VARIABLE = YES;
+				IPHONEOS_DEPLOYMENT_TARGET = 26.0;
+				MTL_ENABLE_DEBUG_INFO = NO;
+				MTL_FAST_MATH = YES;
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				STRING_CATALOG_GENERATE_SYMBOLS = YES;
+				SWIFT_COMPILATION_MODE = wholemodule;
+				SWIFT_OPTIMIZATION_LEVEL = "-O";
+				SWIFT_VERSION = 5.0;
+			};
+			name = Release;
+		};
+		733541140E776685919C7769 /* Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				BUNDLE_LOADER = "$(TEST_HOST)";
+				CLANG_ENABLE_OBJC_WEAK = NO;
+				GENERATE_INFOPLIST_FILE = NO;
+				INFOPLIST_FILE = TimeTrace/Info.plist;
+				IPHONEOS_DEPLOYMENT_TARGET = 26.0;
+				PRODUCT_BUNDLE_IDENTIFIER = com.chronora.time.trace.tests;
+				SDKROOT = iphoneos;
+				SUPPORTED_PLATFORMS = "iphoneos iphonesimulator";
+				TARGETED_DEVICE_FAMILY = 1;
+				TEST_HOST = "$(BUILT_PRODUCTS_DIR)/TimeTrace.app/$(BUNDLE_EXECUTABLE_FOLDER_PATH)/TimeTrace";
+				VALIDATE_PRODUCT = YES;
+			};
+			name = Release;
+		};
+		886C1A4722E6FB8A3125C9E8 /* Debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ALWAYS_SEARCH_USER_PATHS = NO;
+				CLANG_ANALYZER_NONNULL = YES;
+				CLANG_ANALYZER_NUMBER_OBJECT_CONVERSION = YES_AGGRESSIVE;
+				CLANG_CXX_LANGUAGE_STANDARD = "gnu++14";
+				CLANG_CXX_LIBRARY = "libc++";
+				CLANG_ENABLE_MODULES = YES;
+				CLANG_ENABLE_OBJC_ARC = YES;
+				CLANG_ENABLE_OBJC_WEAK = YES;
+				CLANG_WARN_BLOCK_CAPTURE_AUTORELEASING = YES;
+				CLANG_WARN_BOOL_CONVERSION = YES;
+				CLANG_WARN_COMMA = YES;
+				CLANG_WARN_CONSTANT_CONVERSION = YES;
+				CLANG_WARN_DEPRECATED_OBJC_IMPLEMENTATIONS = YES;
+				CLANG_WARN_DIRECT_OBJC_ISA_USAGE = YES_ERROR;
+				CLANG_WARN_DOCUMENTATION_COMMENTS = YES;
+				CLANG_WARN_EMPTY_BODY = YES;
+				CLANG_WARN_ENUM_CONVERSION = YES;
+				CLANG_WARN_INFINITE_RECURSION = YES;
+				CLANG_WARN_INT_CONVERSION = YES;
+				CLANG_WARN_NON_LITERAL_NULL_CONVERSION = YES;
+				CLANG_WARN_OBJC_IMPLICIT_RETAIN_SELF = YES;
+				CLANG_WARN_OBJC_LITERAL_CONVERSION = YES;
+				CLANG_WARN_OBJC_ROOT_CLASS = YES_ERROR;
+				CLANG_WARN_QUOTED_INCLUDE_IN_FRAMEWORK_HEADER = YES;
+				CLANG_WARN_RANGE_LOOP_ANALYSIS = YES;
+				CLANG_WARN_STRICT_PROTOTYPES = YES;
+				CLANG_WARN_SUSPICIOUS_MOVE = YES;
+				CLANG_WARN_UNGUARDED_AVAILABILITY = YES_AGGRESSIVE;
+				CLANG_WARN_UNREACHABLE_CODE = YES;
+				CLANG_WARN__DUPLICATE_METHOD_MATCH = YES;
+				COPY_PHASE_STRIP = NO;
+				DEAD_CODE_STRIPPING = YES;
+				DEBUG_INFORMATION_FORMAT = dwarf;
+				ENABLE_STRICT_OBJC_MSGSEND = YES;
+				ENABLE_TESTABILITY = YES;
+				ENABLE_USER_SCRIPT_SANDBOXING = YES;
+				GCC_C_LANGUAGE_STANDARD = gnu11;
+				GCC_DYNAMIC_NO_PIC = NO;
+				GCC_NO_COMMON_BLOCKS = YES;
+				GCC_OPTIMIZATION_LEVEL = 0;
+				GCC_PREPROCESSOR_DEFINITIONS = (
+					"DEBUG=1",
+					"$(inherited)",
+				);
+				GCC_WARN_64_TO_32_BIT_CONVERSION = YES;
+				GCC_WARN_ABOUT_RETURN_TYPE = YES_ERROR;
+				GCC_WARN_UNDECLARED_SELECTOR = YES;
+				GCC_WARN_UNINITIALIZED_AUTOS = YES_AGGRESSIVE;
+				GCC_WARN_UNUSED_FUNCTION = YES;
+				GCC_WARN_UNUSED_VARIABLE = YES;
+				IPHONEOS_DEPLOYMENT_TARGET = 26.0;
+				MTL_ENABLE_DEBUG_INFO = INCLUDE_SOURCE;
+				MTL_FAST_MATH = YES;
+				ONLY_ACTIVE_ARCH = YES;
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				STRING_CATALOG_GENERATE_SYMBOLS = YES;
+				SWIFT_ACTIVE_COMPILATION_CONDITIONS = DEBUG;
+				SWIFT_OPTIMIZATION_LEVEL = "-Onone";
+				SWIFT_VERSION = 5.0;
+			};
+			name = Debug;
+		};
+		A60C4E28A0CB5F9ADA732C8F /* Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
+				ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME = AccentColor;
+				CLANG_ENABLE_OBJC_WEAK = NO;
+				CODE_SIGN_STYLE = Automatic;
+				CURRENT_PROJECT_VERSION = 1;
+				CODE_SIGN_ENTITLEMENTS = TimeTrace/TimeTrace.entitlements;
+				DEVELOPMENT_TEAM = SG3N92JMS5;
+				GENERATE_INFOPLIST_FILE = YES;
+				INFOPLIST_KEY_CFBundleDisplayName = TimeTrace;
+				INFOPLIST_KEY_NSLocationAlwaysAndWhenInUseUsageDescription = "用于在后台自动记录进入和离开公司。";
+				INFOPLIST_KEY_NSLocationWhenInUseUsageDescription = "用于设置公司位置并监测围栏进出。";
+				INFOPLIST_KEY_UIApplicationSceneManifest_Generation = YES;
+				INFOPLIST_KEY_UILaunchScreen_Generation = YES;
+				IPHONEOS_DEPLOYMENT_TARGET = 26.0;
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/Frameworks",
+				);
+				MARKETING_VERSION = 1.0;
+				PRODUCT_BUNDLE_IDENTIFIER = com.chronora.time.trace;
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SDKROOT = iphoneos;
+				SUPPORTED_PLATFORMS = "iphoneos iphonesimulator";
+				TARGETED_DEVICE_FAMILY = 1;
+				VALIDATE_PRODUCT = YES;
+			};
+			name = Release;
+		};
+		EC3F57F489259B0C2587A325 /* Debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				BUNDLE_LOADER = "$(TEST_HOST)";
+				CLANG_ENABLE_OBJC_WEAK = NO;
+				GENERATE_INFOPLIST_FILE = YES;
+				IPHONEOS_DEPLOYMENT_TARGET = 26.0;
+				PRODUCT_BUNDLE_IDENTIFIER = com.chronora.time.trace.tests;
+				SDKROOT = iphoneos;
+				SUPPORTED_PLATFORMS = "iphoneos iphonesimulator";
+				TARGETED_DEVICE_FAMILY = 1;
+				TEST_HOST = "$(BUILT_PRODUCTS_DIR)/TimeTrace.app/$(BUNDLE_EXECUTABLE_FOLDER_PATH)/TimeTrace";
+			};
+			name = Debug;
+		};
+/* End XCBuildConfiguration section */
+
+/* Begin XCConfigurationList section */
+		0EF0A48B907E852A3E71C0FE /* Build configuration list for PBXProject "TimeTrace" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				886C1A4722E6FB8A3125C9E8 /* Debug */,
+				4E80594714C74ACB09CB7B51 /* Release */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Release;
+		};
+		21E58AEECBD15E1D1F5205A2 /* Build configuration list for PBXNativeTarget "TimeTraceTests" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				733541140E776685919C7769 /* Release */,
+				EC3F57F489259B0C2587A325 /* Debug */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Release;
+		};
+		BF8BF58B87876B31C6B99187 /* Build configuration list for PBXNativeTarget "TimeTrace" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				A60C4E28A0CB5F9ADA732C8F /* Release */,
+				1F6110EE8BC163E35C44D0E1 /* Debug */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Release;
+		};
+/* End XCConfigurationList section */
+	};
+	rootObject = 0087E70B50012339537D34D3 /* Project object */;
+}
