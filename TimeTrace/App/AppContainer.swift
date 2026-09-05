@@ -66,6 +66,7 @@ final class RootStore: FeatureStore {
     func becameActive() {
         application.refreshSyncedData()
         application.refreshICloudSyncStatus()
+        Task { [application] in await application.reconcileReminders() }
     }
 
     func dismissError() { application.lastError = nil }

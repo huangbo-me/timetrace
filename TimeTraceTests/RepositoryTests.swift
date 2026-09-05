@@ -122,6 +122,29 @@ final class RepositoryTests: XCTestCase {
         XCTAssertEqual(try sessions.fetch(activityId: activityId).first?.duration, 3600)
     }
 
+    func testManualEntryClosesWhenItsEventsArriveInSeparatePipelineIngestions() throws {
+        let persistence = try PersistenceController(inMemory: true)
+        let events = SwiftDataActivityEventRepository(context: persistence.context)
+        let sessions = SwiftDataActivitySessionRepository(context: persistence.context)
+        let pipeline = EventPipeline(events: events, sessions: sessions)
+        let activityId = UUID()
+        let start = Date(timeIntervalSince1970: 1_000)
+
+        _ = try pipeline.ingest(
+            ActivityEvent(activityId: activityId, eventType: .manualStart, timestamp: start, source: .user),
+            now: start
+        )
+        _ = try pipeline.ingest(
+            ActivityEvent(activityId: activityId, eventType: .manualStop,
+                          timestamp: start.addingTimeInterval(3_600), source: .user),
+            now: start.addingTimeInterval(3_600)
+        )
+
+        let session = try XCTUnwrap(try sessions.fetch(activityId: activityId).first)
+        XCTAssertEqual(session.status, .manuallyAdjusted)
+        XCTAssertEqual(session.duration, 3_600)
+    }
+
     func testFakeGeofenceCallbacksUseTheEventPipelineAndSendNotifications() async throws {
         let geofence = FakeGeofenceService()
         let notifications = FakeNotificationService()
@@ -182,6 +205,27 @@ final class RepositoryTests: XCTestCase {
         XCTAssertEqual(model.workTriggers.map(\.displayPlaceName), ["办公室", "客户现场"])
         XCTAssertEqual(model.workTriggers.map(\.placeType), [.work, .study])
         XCTAssertEqual(Set(geofence.registeredTriggerIds).count, 2)
+    }
+
+    func testPlaceCanBelongToAnActivityOtherThanWorkAndCanBeDisabled() async throws {
+        let geofence = FakeGeofenceService()
+        let notifications = FakeNotificationService()
+        let model = AppModel(inMemory: true, geofence: geofence, notifications: notifications)
+        model.load()
+        model.finishOnboarding(latitude: 31.2, longitude: 121.4, radius: 200,
+                               weekdaysMask: 0b0111110, normalStartMinute: nil, normalEndMinute: nil)
+        await model.createReminder(name: "游泳", type: .exercise, time: Date(), weekdaysMask: 0b1111111)
+        let exerciseId = try XCTUnwrap(model.reminders.first?.activityId)
+
+        model.addPlace(activityId: exerciseId, latitude: 31.21, longitude: 121.41, radius: 120,
+                       placeName: "泳池", placeType: .exercise)
+        let pool = try XCTUnwrap(model.triggers.first { $0.activityId == exerciseId && $0.type == .geofence })
+        XCTAssertEqual(pool.placeType, .exercise)
+        XCTAssertTrue(geofence.registeredTriggerIds.contains(pool.id))
+
+        model.setPlaceEnabled(triggerId: pool.id, isEnabled: false)
+        XCTAssertFalse(pool.isEnabled)
+        XCTAssertTrue(geofence.removedTriggerIds.contains(pool.id))
     }
 
     func testDeletingWorkplaceStopsItsGeofenceAndRemovesIt() throws {
@@ -329,6 +373,20 @@ final class RepositoryTests: XCTestCase {
         await Task.yield()
         XCTAssertEqual(notifications.snoozedDefinitionIds, [reminder.id])
         XCTAssertEqual(model.reminderInstances.first?.status, .snoozed)
+    }
+
+    func testReminderSchedulingIsReconciledWhenTheApplicationBecomesActive() async throws {
+        let notifications = FakeNotificationService()
+        let model = AppModel(inMemory: true, geofence: FakeGeofenceService(), notifications: notifications)
+        model.load()
+        model.finishOnboarding(latitude: 31.2, longitude: 121.4, radius: 200,
+                               weekdaysMask: 0b0111110, normalStartMinute: nil, normalEndMinute: nil)
+        await model.createReminder(name: "拉伸", type: .exercise, time: Date(), weekdaysMask: 0b1111111)
+        let reminder = try XCTUnwrap(model.reminders.first)
+
+        await model.reconcileReminders()
+
+        XCTAssertEqual(notifications.scheduledDefinitionIds.filter { $0 == reminder.id }.count, 2)
     }
 
     func testManualCorrectionAndSoftDeletion() throws {

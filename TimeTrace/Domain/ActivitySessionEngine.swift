@@ -16,7 +16,14 @@ struct ActivitySessionEngine {
             return $0.id.uuidString < $1.id.uuidString
         }
 
-        let preserved = existingSessions.filter { $0.deletedAt != nil || $0.status == .manuallyAdjusted }
+        // A completed manual correction is an explicit user decision and must
+        // survive replay.  An open manual session is not preserved: it still
+        // needs to consume its later manual-stop event.  Treating every
+        // `.manuallyAdjusted` session as immutable made a two-step manual
+        // entry impossible to close after the first pipeline ingestion.
+        let preserved = existingSessions.filter {
+            $0.deletedAt != nil || ($0.status == .manuallyAdjusted && $0.endAt != nil)
+        }
         var preservedByStart: [UUID: ActivitySession] = [:]
         var preservedEndIds = Set<UUID>()
         for session in preserved {
@@ -25,7 +32,8 @@ struct ActivitySessionEngine {
         }
 
         var automaticByStart: [UUID: ActivitySession] = [:]
-        for session in existingSessions where session.deletedAt == nil && session.status != .manuallyAdjusted {
+        for session in existingSessions where session.deletedAt == nil &&
+            (session.status != .manuallyAdjusted || session.endAt == nil) {
             if let id = session.startEventId { automaticByStart[id] = session }
         }
 
@@ -136,6 +144,57 @@ struct ActivitySessionEngine {
             session.updatedAt = now
         }
 
+        applyUserCorrections(from: ordered, to: existingSessions + created, now: now)
+
         return SessionEngineResult(sessions: existingSessions + created, createdSessions: created)
+    }
+
+    /// Session records are a projection of immutable activity events.  User
+    /// correction events carry the small amount of intent that cannot be
+    /// inferred from a geofence transition, so replay keeps the projection in
+    /// step with its event history instead of relying on callers to mutate a
+    /// managed Session as a second source of truth.
+    private func applyUserCorrections(from events: [ActivityEvent], to sessions: [ActivitySession], now: Date) {
+        let formatter = ISO8601DateFormatter()
+        let sessionsByID = Dictionary(uniqueKeysWithValues: sessions.map { ($0.id, $0) })
+        let sessionsByStartEvent = Dictionary(uniqueKeysWithValues: sessions.compactMap { session in
+            session.startEventId.map { ($0, session) }
+        })
+
+        for event in events {
+            guard event.eventType == .sessionAdjusted || event.eventType == .sessionDeleted else { continue }
+            let values = event.metadata.values
+            let target = UUID(uuidString: values["sessionId"] ?? "").flatMap { sessionsByID[$0] }
+                ?? UUID(uuidString: values["startEventId"] ?? "").flatMap { sessionsByStartEvent[$0] }
+            guard let session = target else {
+                event.disposition = .orphaned
+                continue
+            }
+
+            switch event.eventType {
+            case .sessionAdjusted:
+                guard let startRaw = values["newStart"], let startAt = formatter.date(from: startRaw) else {
+                    event.disposition = .orphaned
+                    continue
+                }
+                let endAt = values["newEnd"].flatMap { $0.isEmpty ? nil : formatter.date(from: $0) }
+                guard endAt == nil || endAt! >= startAt else {
+                    event.disposition = .orphaned
+                    continue
+                }
+                session.startAt = startAt
+                session.endAt = endAt
+                session.status = .manuallyAdjusted
+                session.confidence = .confirmed
+                session.updatedAt = now
+                event.disposition = .applied
+            case .sessionDeleted:
+                session.deletedAt = event.timestamp
+                session.updatedAt = now
+                event.disposition = .applied
+            default:
+                break
+            }
+        }
     }
 }

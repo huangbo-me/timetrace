@@ -115,6 +115,34 @@ final class ActivitySessionEngineTests: XCTestCase {
         XCTAssertNotNil(result.sessions[0].deletedAt)
     }
 
+    func testAdjustmentEventDrivesTheExistingSessionProjection() {
+        let start = event(.geofenceEnter, 9)
+        let end = event(.geofenceExit, 18)
+        let original = engine.reconcile(events: [start, end], existingSessions: [], now: date(day: 1, hour: 19)).sessions
+        let session = original[0]
+        let adjustedStart = date(day: 1, hour: 8, minute: 30)
+        let adjustedEnd = date(day: 1, hour: 17, minute: 30)
+        let adjustment = ActivityEvent(
+            activityId: activityId,
+            eventType: .sessionAdjusted,
+            timestamp: date(day: 1, hour: 20),
+            source: .user,
+            metadata: EventMetadata(values: [
+                "sessionId": session.id.uuidString,
+                "startEventId": start.id.uuidString,
+                "newStart": adjustedStart.ISO8601Format(),
+                "newEnd": adjustedEnd.ISO8601Format()
+            ])
+        )
+
+        let replayed = engine.reconcile(events: [start, end, adjustment], existingSessions: original,
+                                        now: date(day: 1, hour: 20)).sessions[0]
+        XCTAssertEqual(replayed.startAt, adjustedStart)
+        XCTAssertEqual(replayed.endAt, adjustedEnd)
+        XCTAssertEqual(replayed.status, .manuallyAdjusted)
+        XCTAssertEqual(adjustment.disposition, .applied)
+    }
+
     private func event(_ type: ActivityEventType, _ hour: Int, minute: Int = 0,
                        source: ActivityEventSource = .coreLocation) -> ActivityEvent {
         ActivityEvent(activityId: activityId, eventType: type,

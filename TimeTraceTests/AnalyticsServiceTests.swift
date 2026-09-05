@@ -110,6 +110,30 @@ final class AnalyticsServiceTests: XCTestCase {
         XCTAssertEqual(result.last?.incompleteSessionCount, 1)
     }
 
+    func testPeriodSummaryCanFilterToOnePlaceOrUnmarkedSessions() {
+        let office = UUID()
+        let clientSite = UUID()
+        let values = [
+            ActivitySession(activityId: activityId, placeTriggerId: office, startAt: date(day: 1, hour: 9), endAt: date(day: 1, hour: 17), status: .completed),
+            ActivitySession(activityId: activityId, placeTriggerId: clientSite, startAt: date(day: 2, hour: 9), endAt: date(day: 2, hour: 15), status: .completed),
+            ActivitySession(activityId: activityId, startAt: date(day: 3, hour: 10), endAt: date(day: 3, hour: 14), status: .completed)
+        ]
+        let period = interval(day: 1, length: 3)
+        let previous = interval(day: -2, length: 3)
+
+        let officeSummary = service.periodSummary(
+            sessions: values, activityId: activityId, interval: period, previous: previous,
+            placeFilter: .place(office), calendar: calendar
+        )
+        let unmarkedSummary = service.periodSummary(
+            sessions: values, activityId: activityId, interval: period, previous: previous,
+            placeFilter: .place(nil), calendar: calendar
+        )
+
+        XCTAssertEqual(officeSummary.totalWorkDuration, 8 * 3600)
+        XCTAssertEqual(unmarkedSummary.totalWorkDuration, 4 * 3600)
+    }
+
     private func session(day: Int, start: Int, end: Int) -> ActivitySession {
         ActivitySession(activityId: activityId, startAt: date(day: day, hour: start),
                         endAt: date(day: day, hour: end), status: .completed)

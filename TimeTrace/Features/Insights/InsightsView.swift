@@ -7,6 +7,7 @@ struct InsightsView: View {
     @State private var customStart = Calendar.current.date(byAdding: .day, value: -6, to: Date()) ?? Date()
     @State private var customEnd = Date()
     @State private var trendMetric = TrendMetric.workDuration
+    @State private var trendPlaceFilter: PlaceSessionFilter = .all
 
     private var model: AppModel { store.application }
 
@@ -57,21 +58,40 @@ struct InsightsView: View {
                 }
 
                 if let summary {
-                    overview(summary)
+                    overview(trendPlaceFilter == .all ? summary : trendSummary)
                     placeBreakdown
-                    TTSectionTitle(title: "趋势")
+                    HStack {
+                        TTSectionTitle(title: trendTitle)
+                        Spacer()
+                        if trendPlaceFilter != .all {
+                            Button("全部地点") {
+                                withAnimation(.easeInOut(duration: 0.18)) {
+                                    trendPlaceFilter = .all
+                                }
+                            }
+                            .font(.subheadline.weight(.semibold))
+                            .foregroundStyle(TimeTraceDesign.violet)
+                        }
+                    }
                     TTCard {
                         VStack(alignment: .leading, spacing: 14) {
                             Picker("趋势指标", selection: $trendMetric) {
-                                ForEach(TrendMetric.allCases) { metric in Text(metric.title).tag(metric) }
+                                ForEach(TrendMetric.allCases) { metric in
+                                    Text(metric.title(for: insightPresentation)).tag(metric)
+                                }
                             }
                             .pickerStyle(.segmented)
-                            if summary.days.isEmpty {
+                            if trendSummary.days.isEmpty {
                                 ContentUnavailableView("暂无趋势数据", systemImage: "chart.xyaxis.line").frame(height: 190)
                             } else {
-                                WorkTrendChart(summary: summary, metric: trendMetric, calendar: workCalendar)
+                                PlaceTrendChart(
+                                    summary: trendSummary,
+                                    metric: trendMetric,
+                                    presentation: insightPresentation,
+                                    calendar: workCalendar
+                                )
                                     .frame(height: 230)
-                                if summary.days.contains(where: \.isIncomplete) {
+                                if trendSummary.days.contains(where: \.isIncomplete) {
                                     Label("橙色数据点表示记录不完整", systemImage: "circle.fill")
                                         .font(.caption).foregroundStyle(.orange)
                                 }
@@ -79,15 +99,14 @@ struct InsightsView: View {
                         }
                     }
 
-                    TTSectionTitle(title: "工作节奏")
+                    TTSectionTitle(title: insightPresentation.summaryTitle)
                     TTCard {
                         VStack(spacing: 14) {
-                            detailRow("平均到达", TimeTraceFormat.clockOffset(summary.averageArrivalOffset), icon: "sunrise.fill", tint: .orange)
-                            Divider()
-                            detailRow("平均离开", TimeTraceFormat.clockOffset(summary.averageDepartureOffset), icon: "sunset.fill", tint: TimeTraceDesign.violet)
-                            if let day = summary.longestWorkDay {
-                                Divider()
-                                detailRow("最长工作日", TimeTraceFormat.duration(day.totalDuration), icon: "sparkles", tint: TimeTraceDesign.blue)
+                            ForEach(Array(placeSummaryMetrics.enumerated()), id: \.element.id) { index, metric in
+                                detailRow(metric.title, metric.value, icon: metric.icon, tint: metric.tint)
+                                if index < placeSummaryMetrics.count - 1 {
+                                    Divider()
+                                }
                             }
                         }
                     }
@@ -115,9 +134,12 @@ struct InsightsView: View {
     }
 
     @ViewBuilder private func statTiles(_ summary: PeriodActivitySummary) -> some View {
-        StatTile(title: "本期工作时长", value: TimeTraceFormat.duration(summary.totalWorkDuration), icon: "clock.fill", tint: TimeTraceDesign.blue)
+        let average = insightPresentation.averageBySession
+            ? averageSessionDuration(in: summary)
+            : summary.averageWorkDuration
+        StatTile(title: insightPresentation.periodTotalTitle, value: TimeTraceFormat.duration(summary.totalWorkDuration), icon: "clock.fill", tint: TimeTraceDesign.blue)
             .frame(minWidth: 164)
-        StatTile(title: "平均每天", value: summary.averageWorkDuration.map(TimeTraceFormat.duration) ?? "—", icon: "calendar", tint: TimeTraceDesign.violet)
+        StatTile(title: insightPresentation.averageTitle, value: average.map(TimeTraceFormat.duration) ?? "—", icon: "calendar", tint: TimeTraceDesign.violet)
             .frame(minWidth: 164)
     }
 
@@ -138,17 +160,29 @@ struct InsightsView: View {
             } else {
                 VStack(spacing: 12) {
                     ForEach(Array(placeSummaries.enumerated()), id: \.element.id) { index, summary in
-                        HStack(spacing: 12) {
-                            TTIcon(systemName: "mappin.and.ellipse", tint: TimeTraceDesign.blue, size: 36)
-                            VStack(alignment: .leading, spacing: 3) {
-                                Text(placeName(for: summary)).font(.subheadline.weight(.semibold))
-                                Text("\(summary.sessionCount) 次记录\(summary.incompleteSessionCount > 0 ? " · \(summary.incompleteSessionCount) 次未完成" : "")")
-                                    .font(.caption).foregroundStyle(TimeTraceDesign.muted)
+                        Button {
+                            withAnimation(.easeInOut(duration: 0.18)) {
+                                trendPlaceFilter = .place(summary.placeTriggerId)
                             }
-                            Spacer()
-                            Text(TimeTraceFormat.duration(summary.totalDuration))
-                                .font(.subheadline.weight(.bold)).monospacedDigit()
                         }
+                        label: {
+                            HStack(spacing: 12) {
+                                TTIcon(systemName: "mappin.and.ellipse", tint: TimeTraceDesign.blue, size: 36)
+                                VStack(alignment: .leading, spacing: 3) {
+                                    Text(placeName(for: summary)).font(.subheadline.weight(.semibold))
+                                    Text("\(summary.sessionCount) 次记录\(summary.incompleteSessionCount > 0 ? " · \(summary.incompleteSessionCount) 次未完成" : "")")
+                                        .font(.caption).foregroundStyle(TimeTraceDesign.muted)
+                                }
+                                Spacer()
+                                Text(TimeTraceFormat.duration(summary.totalDuration))
+                                    .font(.subheadline.weight(.bold)).monospacedDigit()
+                                Image(systemName: isSelected(summary) ? "checkmark.circle.fill" : "chevron.right")
+                                    .font(.subheadline.weight(.semibold))
+                                    .foregroundStyle(isSelected(summary) ? TimeTraceDesign.violet : TimeTraceDesign.muted)
+                            }
+                            .contentShape(Rectangle())
+                        }
+                        .buttonStyle(.plain)
                         if index < placeSummaries.count - 1 { Divider() }
                     }
                 }
@@ -161,12 +195,146 @@ struct InsightsView: View {
     }
 
     private func placeName(for summary: PlaceActivitySummary) -> String {
-        guard let triggerId = summary.placeTriggerId else { return "未标记地点" }
+        placeName(for: summary.placeTriggerId)
+    }
+
+    private func placeName(for triggerId: UUID?) -> String {
+        guard let triggerId else { return "未标记地点" }
         return model.workTriggers.first { $0.id == triggerId }?.displayPlaceName ?? "已删除地点"
+    }
+
+    private func isSelected(_ summary: PlaceActivitySummary) -> Bool {
+        trendPlaceFilter == .place(summary.placeTriggerId)
     }
 
     private var summary: PeriodActivitySummary? {
         model.periodSummary(interval: intervals.current, previous: intervals.previous)
+    }
+
+    private var trendSummary: PeriodActivitySummary {
+        model.periodSummary(
+            interval: intervals.current,
+            previous: intervals.previous,
+            placeFilter: trendPlaceFilter
+        ) ?? emptySummary
+    }
+
+    private var trendTitle: String {
+        guard case .place(let triggerId) = trendPlaceFilter else { return "趋势" }
+        return "趋势 · \(placeName(for: triggerId))"
+    }
+
+    private var insightPresentation: PlaceInsightPresentation {
+        switch trendPlaceFilter {
+        case .all:
+            return PlaceInsightPresentation(type: .work)
+        case .place(let triggerId):
+            let type = triggerId.flatMap { id in
+                model.workTriggers.first { $0.id == id }?.placeType
+            }
+            return PlaceInsightPresentation(type: type)
+        }
+    }
+
+    private var placeSummaryMetrics: [PlaceSummaryMetric] {
+        let sessions = trendSummary.days.flatMap(\.sessions)
+        let completedSessions = sessions.filter { $0.duration != nil }
+        let averageStay = completedSessions.isEmpty
+            ? nil
+            : completedSessions.compactMap(\.duration).reduce(0, +) / Double(completedSessions.count)
+        let longestStay = completedSessions.compactMap(\.duration).max()
+        let recentVisit = sessions.map(\.startAt).max()
+
+        switch insightPresentation.type {
+        case .work:
+            return [
+                .init("平均到达", TimeTraceFormat.clockOffset(trendSummary.averageArrivalOffset), "sunrise.fill", .orange),
+                .init("平均离开", TimeTraceFormat.clockOffset(trendSummary.averageDepartureOffset), "sunset.fill", TimeTraceDesign.violet),
+                .init("最长工作日", trendSummary.longestWorkDay.map { TimeTraceFormat.duration($0.totalDuration) } ?? "—", "sparkles", TimeTraceDesign.blue)
+            ]
+        case .study:
+            return [
+                .init("学习天数", "\(trendSummary.days.count) 天", "calendar", TimeTraceDesign.violet),
+                .init("平均学习时长", trendSummary.averageWorkDuration.map(TimeTraceFormat.duration) ?? "—", "book.closed.fill", TimeTraceDesign.blue),
+                .init("最长学习日", trendSummary.longestWorkDay.map { TimeTraceFormat.duration($0.totalDuration) } ?? "—", "sparkles", .orange)
+            ]
+        case .exercise:
+            return [
+                .init("运动次数", "\(sessions.count) 次", "figure.run", .orange),
+                .init("平均锻炼时长", averageStay.map(TimeTraceFormat.duration) ?? "—", "timer", TimeTraceDesign.violet),
+                .init("最长锻炼", longestStay.map(TimeTraceFormat.duration) ?? "—", "trophy.fill", TimeTraceDesign.blue)
+            ]
+        case .home:
+            return [
+                .init("到访天数", "\(trendSummary.days.count) 天", "house.fill", TimeTraceDesign.violet),
+                .init("平均停留", averageStay.map(TimeTraceFormat.duration) ?? "—", "timer", TimeTraceDesign.blue),
+                .init("最长停留", longestStay.map(TimeTraceFormat.duration) ?? "—", "moon.stars.fill", .orange)
+            ]
+        case .dining:
+            return [
+                .init("用餐次数", "\(sessions.count) 次", "fork.knife", .orange),
+                .init("平均用餐时长", averageStay.map(TimeTraceFormat.duration) ?? "—", "timer", TimeTraceDesign.violet),
+                .init("常用到店时间", TimeTraceFormat.clockOffset(trendSummary.averageArrivalOffset), "clock.fill", TimeTraceDesign.blue)
+            ]
+        case .shopping:
+            return [
+                .init("购物次数", "\(sessions.count) 次", "bag.fill", TimeTraceDesign.violet),
+                .init("平均停留", averageStay.map(TimeTraceFormat.duration) ?? "—", "timer", TimeTraceDesign.blue),
+                .init("最长停留", longestStay.map(TimeTraceFormat.duration) ?? "—", "sparkles", .orange)
+            ]
+        case .healthcare:
+            return [
+                .init("就诊次数", "\(sessions.count) 次", "cross.case.fill", .red),
+                .init("平均就诊时长", averageStay.map(TimeTraceFormat.duration) ?? "—", "timer", TimeTraceDesign.violet),
+                .init("最近就诊", formattedVisitDate(recentVisit), "calendar", TimeTraceDesign.blue)
+            ]
+        case .leisure:
+            return [
+                .init("休闲次数", "\(sessions.count) 次", "gamecontroller.fill", TimeTraceDesign.violet),
+                .init("平均停留", averageStay.map(TimeTraceFormat.duration) ?? "—", "timer", TimeTraceDesign.blue),
+                .init("最长停留", longestStay.map(TimeTraceFormat.duration) ?? "—", "sparkles", .orange)
+            ]
+        case .other, .none:
+            return [
+                .init("到访次数", "\(sessions.count) 次", "mappin.and.ellipse", TimeTraceDesign.violet),
+                .init("平均停留", averageStay.map(TimeTraceFormat.duration) ?? "—", "timer", TimeTraceDesign.blue),
+                .init("最长停留", longestStay.map(TimeTraceFormat.duration) ?? "—", "sparkles", .orange)
+            ]
+        }
+    }
+
+    private func formattedVisitDate(_ date: Date?) -> String {
+        guard let date else { return "—" }
+        let formatter = DateFormatter()
+        formatter.locale = TimeTraceLocalization.locale
+        formatter.timeZone = workCalendar.timeZone
+        formatter.dateFormat = "M月d日"
+        return formatter.string(from: date)
+    }
+
+    private func averageSessionDuration(in summary: PeriodActivitySummary) -> TimeInterval? {
+        let durations = summary.days.flatMap(\.sessions).compactMap(\.duration)
+        guard !durations.isEmpty else { return nil }
+        return durations.reduce(0, +) / Double(durations.count)
+    }
+
+    private var emptySummary: PeriodActivitySummary {
+        PeriodActivitySummary(
+            start: intervals.current.start,
+            end: intervals.current.end,
+            workingDays: 0,
+            totalWorkDuration: 0,
+            averageWorkDuration: nil,
+            averageArrivalOffset: nil,
+            averageDepartureOffset: nil,
+            latestDepartureTime: nil,
+            latestDepartureDate: nil,
+            earliestArrivalTime: nil,
+            longestWorkDay: nil,
+            incompleteDays: 0,
+            comparison: PeriodComparison(workDurationChange: nil, arrivalTimeChange: nil, departureTimeChange: nil),
+            days: []
+        )
     }
 
     private var workCalendar: Calendar {
@@ -227,6 +395,65 @@ private struct StatTile: View {
     }
 }
 
+private struct PlaceSummaryMetric: Identifiable {
+    var id: String { title }
+    let title: String
+    let value: String
+    let icon: String
+    let tint: Color
+
+    init(_ title: String, _ value: String, _ icon: String, _ tint: Color) {
+        self.title = title
+        self.value = value
+        self.icon = icon
+        self.tint = tint
+    }
+}
+
+private struct PlaceInsightPresentation {
+    let type: PlaceType?
+    let periodTotalTitle: String
+    let averageTitle: String
+    let averageBySession: Bool
+    let summaryTitle: String
+    let durationMetricTitle: String
+    let arrivalMetricTitle: String
+    let departureMetricTitle: String
+
+    init(type: PlaceType?) {
+        self.type = type
+        switch type {
+        case .work:
+            periodTotalTitle = "本期工作时长"; averageTitle = "平均每天"; averageBySession = false
+            summaryTitle = "工作节奏"; durationMetricTitle = "时长"; arrivalMetricTitle = "到达"; departureMetricTitle = "离开"
+        case .study:
+            periodTotalTitle = "本期学习时长"; averageTitle = "平均每天"; averageBySession = false
+            summaryTitle = "学习概览"; durationMetricTitle = "学习时长"; arrivalMetricTitle = "开始"; departureMetricTitle = "结束"
+        case .exercise:
+            periodTotalTitle = "本期锻炼时长"; averageTitle = "平均每次"; averageBySession = true
+            summaryTitle = "运动习惯"; durationMetricTitle = "锻炼时长"; arrivalMetricTitle = "入馆"; departureMetricTitle = "离馆"
+        case .home:
+            periodTotalTitle = "本期停留时长"; averageTitle = "平均每次"; averageBySession = true
+            summaryTitle = "居住概览"; durationMetricTitle = "停留时长"; arrivalMetricTitle = "到家"; departureMetricTitle = "离家"
+        case .dining:
+            periodTotalTitle = "本期用餐时长"; averageTitle = "平均每次"; averageBySession = true
+            summaryTitle = "用餐概览"; durationMetricTitle = "用餐时长"; arrivalMetricTitle = "到店"; departureMetricTitle = "离店"
+        case .shopping:
+            periodTotalTitle = "本期购物停留"; averageTitle = "平均每次"; averageBySession = true
+            summaryTitle = "购物概览"; durationMetricTitle = "停留时长"; arrivalMetricTitle = "到店"; departureMetricTitle = "离店"
+        case .healthcare:
+            periodTotalTitle = "本期就诊时长"; averageTitle = "平均每次"; averageBySession = true
+            summaryTitle = "就诊概览"; durationMetricTitle = "就诊时长"; arrivalMetricTitle = "到院"; departureMetricTitle = "离院"
+        case .leisure:
+            periodTotalTitle = "本期休闲时长"; averageTitle = "平均每次"; averageBySession = true
+            summaryTitle = "休闲概览"; durationMetricTitle = "停留时长"; arrivalMetricTitle = "到店"; departureMetricTitle = "离店"
+        case .other, .none:
+            periodTotalTitle = "本期停留时长"; averageTitle = "平均每次"; averageBySession = true
+            summaryTitle = "地点概览"; durationMetricTitle = "停留时长"; arrivalMetricTitle = "到达"; departureMetricTitle = "离开"
+        }
+    }
+}
+
 private enum InsightRange: String, CaseIterable, Identifiable {
     case recentThreeDays
     case thisWeek
@@ -281,11 +508,11 @@ private enum TrendMetric: String, CaseIterable, Identifiable {
 
     var id: Self { self }
 
-    var title: String {
+    func title(for presentation: PlaceInsightPresentation) -> String {
         switch self {
-        case .workDuration: "时长"
-        case .arrival: "到达"
-        case .departure: "离开"
+        case .workDuration: presentation.durationMetricTitle
+        case .arrival: presentation.arrivalMetricTitle
+        case .departure: presentation.departureMetricTitle
         }
     }
 
@@ -341,9 +568,10 @@ private struct WorkTrendPoint: Identifiable {
     let isIncomplete: Bool
 }
 
-private struct WorkTrendChart: View {
+private struct PlaceTrendChart: View {
     let summary: PeriodActivitySummary
     let metric: TrendMetric
+    let presentation: PlaceInsightPresentation
     let calendar: Calendar
 
     @State private var selectedDate: Date?
@@ -351,14 +579,14 @@ private struct WorkTrendChart: View {
     var body: some View {
         Group {
             if points.isEmpty {
-                ContentUnavailableView("暂无\(metric.title)数据", systemImage: "chart.xyaxis.line")
+                ContentUnavailableView("暂无\(metric.title(for: presentation))数据", systemImage: "chart.xyaxis.line")
             } else {
                 chart
             }
         }
         .animation(.easeInOut(duration: 0.25), value: metric)
         .onChange(of: metric) { _, _ in selectedDate = nil }
-        .accessibilityLabel("\(metric.title)每日趋势图")
+        .accessibilityLabel("\(metric.title(for: presentation))每日趋势图")
     }
 
     private var chart: some View {
@@ -367,7 +595,7 @@ private struct WorkTrendChart: View {
                 ForEach(points) { point in
                     AreaMark(
                         x: .value("日期", point.date),
-                        y: .value(metric.title, point.value)
+                        y: .value(metric.title(for: presentation), point.value)
                     )
                     .interpolationMethod(.catmullRom)
                     .foregroundStyle(
@@ -383,7 +611,7 @@ private struct WorkTrendChart: View {
             ForEach(points) { point in
                 LineMark(
                     x: .value("日期", point.date),
-                    y: .value(metric.title, point.value)
+                    y: .value(metric.title(for: presentation), point.value)
                 )
                 .interpolationMethod(.catmullRom)
                 .lineStyle(StrokeStyle(lineWidth: 3, lineCap: .round, lineJoin: .round))
@@ -391,7 +619,7 @@ private struct WorkTrendChart: View {
 
                 PointMark(
                     x: .value("日期", point.date),
-                    y: .value(metric.title, point.value)
+                    y: .value(metric.title(for: presentation), point.value)
                 )
                 .symbolSize(point.isIncomplete ? 75 : 45)
                 .foregroundStyle(point.isIncomplete ? .orange : metric.color)

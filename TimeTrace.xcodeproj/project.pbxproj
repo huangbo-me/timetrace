@@ -522,9 +522,10 @@
 				CODE_SIGN_ENTITLEMENTS = TimeTrace/TimeTrace.entitlements;
 				DEVELOPMENT_TEAM = SG3N92JMS5;
 				GENERATE_INFOPLIST_FILE = YES;
-				INFOPLIST_KEY_CFBundleDisplayName = TimeTrace;
-				INFOPLIST_KEY_NSLocationAlwaysAndWhenInUseUsageDescription = "用于在后台自动记录进入和离开公司。";
-				INFOPLIST_KEY_NSLocationWhenInUseUsageDescription = "用于设置公司位置并监测围栏进出。";
+				INFOPLIST_KEY_CFBundleDisplayName = "时迹";
+				INFOPLIST_KEY_ITSAppUsesNonExemptEncryption = NO;
+				INFOPLIST_KEY_NSLocationAlwaysAndWhenInUseUsageDescription = "用于在后台自动记录进入和离开已添加地点的时间。";
+				INFOPLIST_KEY_NSLocationWhenInUseUsageDescription = "用于设置地点并监测围栏进出。";
 				INFOPLIST_KEY_UIApplicationSceneManifest_Generation = YES;
 				INFOPLIST_KEY_UILaunchScreen_Generation = YES;
 				IPHONEOS_DEPLOYMENT_TARGET = 26.0;

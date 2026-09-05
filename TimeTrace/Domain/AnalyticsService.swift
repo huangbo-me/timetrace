@@ -42,12 +42,26 @@ struct PlaceActivitySummary: Identifiable {
     let incompleteSessionCount: Int
 }
 
+/// Keeps the unmarked-place filter distinct from showing every place.
+enum PlaceSessionFilter: Equatable {
+    case all
+    case place(UUID?)
+
+    func includes(_ session: ActivitySession) -> Bool {
+        switch self {
+        case .all: true
+        case .place(let triggerId): session.placeTriggerId == triggerId
+        }
+    }
+}
+
 protocol AnalyticsServicing {
     func dailySummaries(sessions: [ActivitySession], activityId: UUID?, interval: DateInterval,
                         calendar: Calendar) -> [DailyActivitySummary]
     func placeSummaries(sessions: [ActivitySession], activityId: UUID, interval: DateInterval) -> [PlaceActivitySummary]
     func periodSummary(sessions: [ActivitySession], activityId: UUID, interval: DateInterval,
-                       previous: DateInterval, calendar: Calendar) -> PeriodActivitySummary
+                       previous: DateInterval, placeFilter: PlaceSessionFilter,
+                       calendar: Calendar) -> PeriodActivitySummary
     func weeklySummary(sessions: [ActivitySession], activityId: UUID, containing date: Date,
                        calendar: Calendar) -> PeriodActivitySummary
     func monthlySummary(sessions: [ActivitySession], activityId: UUID, containing date: Date,
@@ -101,7 +115,7 @@ struct AnalyticsService: AnalyticsServicing {
         let current = weekInterval(containing: date, calendar: calendar)
         let previous = DateInterval(start: calendar.date(byAdding: .day, value: -7, to: current.start)!, end: current.start)
         return periodSummary(sessions: sessions, activityId: activityId, interval: current,
-                             previous: previous, calendar: calendar)
+                             previous: previous, placeFilter: .all, calendar: calendar)
     }
 
     func monthlySummary(sessions: [ActivitySession], activityId: UUID, containing date: Date,
@@ -110,13 +124,15 @@ struct AnalyticsService: AnalyticsServicing {
         let previousDate = calendar.date(byAdding: .month, value: -1, to: current.start)!
         let previous = calendar.dateInterval(of: .month, for: previousDate)!
         return periodSummary(sessions: sessions, activityId: activityId, interval: current,
-                             previous: previous, calendar: calendar)
+                             previous: previous, placeFilter: .all, calendar: calendar)
     }
 
     func periodSummary(sessions: [ActivitySession], activityId: UUID, interval: DateInterval,
-                       previous: DateInterval, calendar: Calendar) -> PeriodActivitySummary {
-        let days = dailySummaries(sessions: sessions, activityId: activityId, interval: interval, calendar: calendar)
-        let previousDays = dailySummaries(sessions: sessions, activityId: activityId, interval: previous, calendar: calendar)
+                       previous: DateInterval, placeFilter: PlaceSessionFilter = .all,
+                       calendar: Calendar) -> PeriodActivitySummary {
+        let selectedSessions = sessions.filter { placeFilter.includes($0) }
+        let days = dailySummaries(sessions: selectedSessions, activityId: activityId, interval: interval, calendar: calendar)
+        let previousDays = dailySummaries(sessions: selectedSessions, activityId: activityId, interval: previous, calendar: calendar)
         let metrics = calculate(days: days, calendar: calendar)
         let old = calculate(days: previousDays, calendar: calendar)
         return PeriodActivitySummary(

@@ -84,6 +84,6 @@ scheduled → reminded → started → inProgress → completed
 
 ## MVP 边界
 
-- 仅 iPhone、iOS 26、简体中文、本地 SwiftData。
-- 不实现服务器、CloudKit、AI、连续轨迹或 App Shield。公司位置支持本地 MapKit 地址搜索。
+- 仅 iPhone、iOS 26、简体中文。使用 SwiftData，并在可用时同步到私有 CloudKit 数据库。
+- 不实现自建服务器、AI、连续轨迹或 App Shield。公司位置支持本地 MapKit 地址搜索。
 - Screen Time 仅提供协议和可测试 Stub，不引入 entitlement。
