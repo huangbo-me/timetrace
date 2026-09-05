@@ -207,6 +207,7 @@
 				31A2276D909E6DE3CD3EF942 /* Sources */,
 				BC543302D754EE9E5E74018C /* Frameworks */,
 				4700FF264DB48B82E88EA5C1 /* Resources */,
+				B00000000000000000000001 /* Stamp Build Number */,
 			);
 			buildRules = (
 			);
@@ -284,6 +285,25 @@
 		};
 /* End PBXResourcesBuildPhase section */
 
+/* Begin PBXShellScriptBuildPhase section */
+		B00000000000000000000001 /* Stamp Build Number */ = {
+			isa = PBXShellScriptBuildPhase;
+			alwaysOutOfDate = 1;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			inputPaths = (
+				"$(TARGET_BUILD_DIR)/$(INFOPLIST_PATH)",
+			);
+			name = "Stamp Build Number";
+			outputPaths = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+			shellPath = /bin/sh;
+			shellScript = "set -eu\nBUILD_INFO_PLIST=\"${TARGET_BUILD_DIR}/${INFOPLIST_PATH}\"\nBUILD_TIMESTAMP=\"$(env TZ=Asia/Shanghai /bin/date '+%Y%m%d%H%M')\"\nif [ ! -f \"$BUILD_INFO_PLIST\" ]; then\n  echo \"error: Processed Info.plist was not found at $BUILD_INFO_PLIST\"\n  exit 1\nfi\n/usr/libexec/PlistBuddy -c \"Set :CFBundleVersion $BUILD_TIMESTAMP\" \"$BUILD_INFO_PLIST\"\necho \"Stamped build number: $BUILD_TIMESTAMP\"\n";
+		};
+/* End PBXShellScriptBuildPhase section */
+
 /* Begin PBXSourcesBuildPhase section */
 		31A2276D909E6DE3CD3EF942 /* Sources */ = {
 			isa = PBXSourcesBuildPhase;
@@ -347,9 +367,10 @@
 				ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME = AccentColor;
 				CLANG_ENABLE_OBJC_WEAK = NO;
 				CODE_SIGN_STYLE = Automatic;
-				CURRENT_PROJECT_VERSION = 1;
+				CURRENT_PROJECT_VERSION = 202609051927;
 				CODE_SIGN_ENTITLEMENTS = TimeTrace/TimeTrace.entitlements;
 				DEVELOPMENT_TEAM = SG3N92JMS5;
+				ENABLE_USER_SCRIPT_SANDBOXING = NO;
 				GENERATE_INFOPLIST_FILE = NO;
 				INFOPLIST_FILE = TimeTrace/Info.plist;
 				INFOPLIST_KEY_CFBundleDisplayName = TimeTrace;
@@ -362,7 +383,7 @@
 					"$(inherited)",
 					"@executable_path/Frameworks",
 				);
-				MARKETING_VERSION = 1.0;
+				MARKETING_VERSION = 0.1.0;
 				PRODUCT_BUNDLE_IDENTIFIER = com.chronora.time.trace;
 				PRODUCT_NAME = "$(TARGET_NAME)";
 				SDKROOT = iphoneos;
@@ -518,9 +539,10 @@
 				ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME = AccentColor;
 				CLANG_ENABLE_OBJC_WEAK = NO;
 				CODE_SIGN_STYLE = Automatic;
-				CURRENT_PROJECT_VERSION = 1;
+				CURRENT_PROJECT_VERSION = 202609051927;
 				CODE_SIGN_ENTITLEMENTS = TimeTrace/TimeTrace.entitlements;
 				DEVELOPMENT_TEAM = SG3N92JMS5;
+				ENABLE_USER_SCRIPT_SANDBOXING = NO;
 				GENERATE_INFOPLIST_FILE = YES;
 				INFOPLIST_KEY_CFBundleDisplayName = "时迹";
 				INFOPLIST_KEY_ITSAppUsesNonExemptEncryption = NO;
@@ -533,7 +555,7 @@
 					"$(inherited)",
 					"@executable_path/Frameworks",
 				);
-				MARKETING_VERSION = 1.0;
+				MARKETING_VERSION = 0.1.0;
 				PRODUCT_BUNDLE_IDENTIFIER = com.chronora.time.trace;
 				PRODUCT_NAME = "$(TARGET_NAME)";
 				SDKROOT = iphoneos;
