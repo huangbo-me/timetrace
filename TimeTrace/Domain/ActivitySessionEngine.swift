@@ -7,6 +7,16 @@ struct SessionEngineResult {
 
 struct ActivitySessionEngine {
     static let staleInterval: TimeInterval = 24 * 60 * 60
+    /// Core Location can deliver the same region exit more than once while it
+    /// is settling a boundary transition.  Only treat an immediately repeated
+    /// exit as a duplicate; a later exit without a matching arrival remains a
+    /// repairable anomaly.
+    static let duplicateGeofenceExitInterval: TimeInterval = 5
+
+    private enum Active {
+        case automatic(ActivitySession, ActivityEvent, allowsExtendedDuration: Bool)
+        case preserved(ActivitySession)
+    }
 
     func reconcile(events: [ActivityEvent], existingSessions: [ActivitySession],
                    now: Date = Date(), timeZoneIdentifier: String = TimeZone.current.identifier) -> SessionEngineResult {
@@ -37,48 +47,48 @@ struct ActivitySessionEngine {
             if let id = session.startEventId { automaticByStart[id] = session }
         }
 
-        enum Active {
-            case automatic(ActivitySession, ActivityEvent, allowsExtendedDuration: Bool)
-            case preserved(ActivitySession)
-        }
-
-        var active: Active?
+        // A single activity may use several physical places.  Location events
+        // must therefore be paired by the place that emitted them, not merely
+        // by activity ID.  Otherwise an exit from "公司" can close a session
+        // that started at "家" and leave the real company exit orphaned.
+        var activeByPlace: [UUID: Active] = [:]
+        var activeWithoutPlace: Active?
+        var latestAppliedExitByPlace: [UUID: Date] = [:]
         var created: [ActivitySession] = []
 
         for event in ordered {
-            if let currentActive = active {
-                let start: Date?
-                switch currentActive {
-                case .automatic(_, let startEvent, let allowsExtendedDuration):
-                    start = allowsExtendedDuration ? nil : startEvent.timestamp
-                case .preserved(let session): start = session.startAt
-                }
-                if let start, event.timestamp.timeIntervalSince(start) >= Self.staleInterval {
-                    if case .automatic(let session, _, _) = currentActive {
-                        session.endAt = nil
-                        session.endEventId = nil
-                        session.status = .incomplete
-                        session.confidence = .uncertain
-                        session.updatedAt = now
-                    }
-                    active = nil
-                }
+            activeWithoutPlace = expireIfStale(activeWithoutPlace, before: event, now: now)
+            for placeId in Array(activeByPlace.keys) {
+                activeByPlace[placeId] = expireIfStale(activeByPlace[placeId], before: event, now: now)
             }
 
             if let preservedSession = preservedByStart[event.id] {
                 event.disposition = .applied
-                active = .preserved(preservedSession)
+                if let placeId = preservedSession.placeTriggerId {
+                    activeByPlace[placeId] = .preserved(preservedSession)
+                } else {
+                    activeWithoutPlace = .preserved(preservedSession)
+                }
                 continue
             }
 
             if preservedEndIds.contains(event.id) {
                 event.disposition = .applied
-                active = nil
+                if let preservedSession = preserved.first(where: { $0.endEventId == event.id }),
+                   let placeId = preservedSession.placeTriggerId {
+                    activeByPlace[placeId] = nil
+                    latestAppliedExitByPlace[placeId] = event.timestamp
+                } else {
+                    activeWithoutPlace = nil
+                }
                 continue
             }
 
             if event.eventType.startsSession {
-                guard active == nil else {
+                let placeId = geofencePlaceId(for: event)
+                let currentActive = placeId.flatMap { activeByPlace[$0] }
+                    ?? (placeId == nil ? activeWithoutPlace : nil)
+                guard currentActive == nil else {
                     event.disposition = .redundant
                     continue
                 }
@@ -108,10 +118,25 @@ struct ActivitySessionEngine {
                     created.append(session)
                 }
                 event.disposition = .applied
-                active = .automatic(session, event, allowsExtendedDuration: allowsExtendedDuration)
+                let nextActive = Active.automatic(session, event, allowsExtendedDuration: allowsExtendedDuration)
+                if let placeId {
+                    activeByPlace[placeId] = nextActive
+                } else {
+                    activeWithoutPlace = nextActive
+                }
             } else if event.eventType.stopsSession {
-                guard let current = active else {
-                    event.disposition = .orphaned
+                let placeId = geofencePlaceId(for: event)
+                let currentActive = placeId.flatMap { activeByPlace[$0] }
+                    ?? (placeId == nil ? activeWithoutPlace : nil)
+                guard let current = currentActive else {
+                    // Core Location reports the current state for a newly
+                    // registered region, but it cannot reconstruct when the
+                    // person originally arrived.  The first later exit is not
+                    // a missing record and must not ask the user to invent one.
+                    let isImmediateDuplicate = placeId.flatMap { latestAppliedExitByPlace[$0] }
+                        .map { event.timestamp.timeIntervalSince($0) <= Self.duplicateGeofenceExitInterval } ?? false
+                    event.disposition = event.metadata.values["monitoringBeganInside"] == "true" || isImmediateDuplicate
+                        ? .redundant : .orphaned
                     continue
                 }
                 switch current {
@@ -127,7 +152,12 @@ struct ActivitySessionEngine {
                     session.confidence = .confirmed
                     session.updatedAt = now
                     event.disposition = .applied
-                    active = nil
+                    if let placeId {
+                        activeByPlace[placeId] = nil
+                        latestAppliedExitByPlace[placeId] = event.timestamp
+                    } else {
+                        activeWithoutPlace = nil
+                    }
                 case .preserved:
                     event.disposition = .redundant
                 }
@@ -136,14 +166,17 @@ struct ActivitySessionEngine {
             }
         }
 
-        if case .automatic(let session, let startEvent, let allowsExtendedDuration) = active {
-            if !allowsExtendedDuration && now.timeIntervalSince(startEvent.timestamp) >= Self.staleInterval {
-                session.status = .incomplete
-                session.confidence = .uncertain
-            } else if session.status != .manuallyAdjusted {
-                session.status = .active
+        let remainingActive = Array(activeByPlace.values) + (activeWithoutPlace.map { [$0] } ?? [])
+        for active in remainingActive {
+            if case .automatic(let session, let startEvent, let allowsExtendedDuration) = active {
+                if !allowsExtendedDuration && now.timeIntervalSince(startEvent.timestamp) >= Self.staleInterval {
+                    session.status = .incomplete
+                    session.confidence = .uncertain
+                } else if session.status != .manuallyAdjusted {
+                    session.status = .active
+                }
+                session.updatedAt = now
             }
-            session.updatedAt = now
         }
 
         applyUserCorrections(from: ordered, to: existingSessions + created, now: now)
@@ -155,6 +188,31 @@ struct ActivitySessionEngine {
         guard event.eventType == .geofenceEnter else { return false }
         let placeType = event.metadata.values["placeType"].flatMap(PlaceType.init(rawValue:))
         return placeType.map { $0 != .work } ?? false
+    }
+
+    private func geofencePlaceId(for event: ActivityEvent) -> UUID? {
+        guard event.eventType == .geofenceEnter || event.eventType == .geofenceExit else { return nil }
+        return UUID(uuidString: event.metadata.values["placeTriggerId"] ?? "")
+    }
+
+    private func expireIfStale(_ active: Active?, before event: ActivityEvent, now: Date) -> Active? {
+        guard let active else { return nil }
+        let start: Date?
+        switch active {
+        case .automatic(_, let startEvent, let allowsExtendedDuration):
+            start = allowsExtendedDuration ? nil : startEvent.timestamp
+        case .preserved(let session):
+            start = session.startAt
+        }
+        guard let start, event.timestamp.timeIntervalSince(start) >= Self.staleInterval else { return active }
+        if case .automatic(let session, _, _) = active {
+            session.endAt = nil
+            session.endEventId = nil
+            session.status = .incomplete
+            session.confidence = .uncertain
+            session.updatedAt = now
+        }
+        return nil
     }
 
     /// Session records are a projection of immutable activity events.  User

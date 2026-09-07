@@ -26,6 +26,7 @@ protocol GeofenceServicing: AnyObject {
     var lastHorizontalAccuracy: CLLocationAccuracy? { get }
     var onEvent: ((GeofenceSystemEvent) -> Void)? { get set }
     var onAuthorizationChange: ((CLAuthorizationStatus) -> Void)? { get set }
+    var onRegionState: ((UUID, CLRegionState) -> Void)? { get set }
     func requestWhenInUseAuthorization()
     func requestAlwaysAuthorization()
     func requestCurrentLocation() async throws -> CLLocationCoordinate2D
@@ -42,6 +43,7 @@ final class CoreLocationGeofenceService: NSObject, GeofenceServicing, @preconcur
     private(set) var lastHorizontalAccuracy: CLLocationAccuracy?
     var onEvent: ((GeofenceSystemEvent) -> Void)?
     var onAuthorizationChange: ((CLAuthorizationStatus) -> Void)?
+    var onRegionState: ((UUID, CLRegionState) -> Void)?
 
     override init() {
         super.init()
@@ -91,6 +93,10 @@ final class CoreLocationGeofenceService: NSObject, GeofenceServicing, @preconcur
         region.notifyOnEntry = true
         region.notifyOnExit = true
         manager.startMonitoring(for: region)
+        // A person may configure a place while already inside it. Asking for
+        // the current state lets the app distinguish that first later exit
+        // from a genuinely missed arrival.
+        manager.requestState(for: region)
         return acceptedRadius
     }
 
@@ -104,9 +110,6 @@ final class CoreLocationGeofenceService: NSObject, GeofenceServicing, @preconcur
     func restoreAndRequestState(triggerId: UUID, latitude: Double, longitude: Double, radius: Double) {
         do {
             _ = try register(triggerId: triggerId, latitude: latitude, longitude: longitude, radius: radius)
-            if let region = manager.monitoredRegions.first(where: { $0.identifier == regionIdentifier(triggerId) }) {
-                manager.requestState(for: region)
-            }
         } catch {
             logger.error("Unable to restore geofence: \(error.localizedDescription, privacy: .public)")
         }
@@ -151,6 +154,8 @@ final class CoreLocationGeofenceService: NSObject, GeofenceServicing, @preconcur
     }
 
     func locationManager(_ manager: CLLocationManager, didDetermineState state: CLRegionState, for region: CLRegion) {
+        guard let triggerId = triggerId(from: region.identifier) else { return }
+        onRegionState?(triggerId, state)
         // State checks restore monitoring but are not facts about a boundary crossing.
         logger.info("Region state restored: \(String(describing: state), privacy: .public)")
     }

@@ -60,6 +60,10 @@ final class AppModel: ObservableObject {
     private let reminderRepository: ReminderRepository
     private let pipeline: EventPipeline
     private var isCloudKitEnabled = false
+    /// Places added while the person is already inside have no knowable
+    /// arrival time. Their first subsequent exit is informational, not an
+    /// anomaly that should ask the person to fabricate an arrival.
+    private var monitoringBeganInsideTriggerIDs = Set<UUID>()
     /// A notification tap can arrive while the app is being cold-launched,
     /// before `load()` has restored the SwiftData-backed screen state.
     private var pendingNotificationActions: [ReminderNotificationAction] = []
@@ -130,6 +134,9 @@ final class AppModel: ObservableObject {
         self.geofence.onAuthorizationChange = { [weak self] status in
             self?.locationAuthorizationStatus = status
             self?.geofenceCapabilityStatus = .geofence(for: status)
+        }
+        self.geofence.onRegionState = { [weak self] triggerId, state in
+            self?.handleGeofenceRegionState(triggerId: triggerId, state: state)
         }
         self.notifications.onAction = { [weak self] action in self?.receiveNotificationAction(action) }
         self.notifications.registerCategories()
@@ -803,6 +810,7 @@ final class AppModel: ObservableObject {
 
     private func refreshPublishedData() {
         do {
+            try normalizeImmediateDuplicateGeofenceExits()
             activities = try activityRepository.fetchAll()
             triggers = try activityRepository.fetchTriggers(activityId: nil)
             events = try eventRepository.fetchAll()
@@ -810,6 +818,38 @@ final class AppModel: ObservableObject {
             reminders = try reminderRepository.fetchDefinitions()
             reminderInstances = try reminderRepository.fetchInstances()
         } catch { lastError = TimeTraceLocalization.errorMessage(error, fallback: "刷新本地数据失败，请稍后重试。") }
+    }
+
+    /// Processing disposition is stored with CloudKit-backed events. A remote
+    /// merge can therefore briefly restore an old `.orphaned` value after a
+    /// newer client has already recognized an immediate duplicate exit. Make
+    /// this deterministic from the immutable event sequence every time data
+    /// is published, so a completed record never regains a false repair task.
+    private func normalizeImmediateDuplicateGeofenceExits() throws {
+        let orderedEvents = try eventRepository.fetchAll().sorted {
+            if $0.timestamp != $1.timestamp { return $0.timestamp < $1.timestamp }
+            if $0.createdAt != $1.createdAt { return $0.createdAt < $1.createdAt }
+            return $0.id.uuidString < $1.id.uuidString
+        }
+        var latestAppliedExitByPlace: [UUID: Date] = [:]
+        var changed = false
+
+        for event in orderedEvents where event.eventType == .geofenceExit {
+            guard let placeId = UUID(uuidString: event.metadata.values["placeTriggerId"] ?? "") else { continue }
+            if event.disposition == .applied {
+                latestAppliedExitByPlace[placeId] = event.timestamp
+                continue
+            }
+            guard event.disposition == .orphaned,
+                  let precedingExit = latestAppliedExitByPlace[placeId],
+                  event.timestamp.timeIntervalSince(precedingExit) <= ActivitySessionEngine.duplicateGeofenceExitInterval else {
+                continue
+            }
+            event.disposition = .redundant
+            changed = true
+        }
+
+        if changed { try eventRepository.saveProcessingChanges() }
     }
 
     private func refreshDataAndRestoreGeofence() throws {
@@ -890,9 +930,15 @@ final class AppModel: ObservableObject {
             let triggerId: UUID
             let timestamp: Date
             let type: ActivityEventType
+            let monitoringBeganInside: Bool
             switch systemEvent {
-            case .entered(let id, let date): (triggerId, timestamp, type) = (id, date, .geofenceEnter)
-            case .exited(let id, let date): (triggerId, timestamp, type) = (id, date, .geofenceExit)
+            case .entered(let id, let date):
+                (triggerId, timestamp, type) = (id, date, .geofenceEnter)
+                monitoringBeganInsideTriggerIDs.remove(id)
+                monitoringBeganInside = false
+            case .exited(let id, let date):
+                (triggerId, timestamp, type) = (id, date, .geofenceExit)
+                monitoringBeganInside = monitoringBeganInsideTriggerIDs.remove(id) != nil
             }
             guard let trigger = try activityRepository.fetchTriggers(activityId: nil)
                 .first(where: { $0.id == triggerId && $0.type == .geofence && $0.isEnabled }) else { return }
@@ -900,6 +946,9 @@ final class AppModel: ObservableObject {
             var metadata = timeZoneMetadata()
             metadata.values["placeTriggerId"] = trigger.id.uuidString
             metadata.values["placeType"] = trigger.placeType.rawValue
+            if monitoringBeganInside {
+                metadata.values["monitoringBeganInside"] = "true"
+            }
             _ = try pipeline.ingest(ActivityEvent(activityId: activityId, eventType: type,
                                                   timestamp: timestamp, source: .coreLocation,
                                                   metadata: metadata),
@@ -916,6 +965,15 @@ final class AppModel: ObservableObject {
                 )
             }
         } catch { lastError = TimeTraceLocalization.errorMessage(error, fallback: "保存定位事件失败，请稍后重试。") }
+    }
+
+    private func handleGeofenceRegionState(triggerId: UUID, state: CLRegionState) {
+        guard state == .inside else { return }
+        let hasActiveSession = (try? sessionRepository.fetch(activityId: nil))?.contains {
+            $0.placeTriggerId == triggerId && $0.deletedAt == nil && $0.endAt == nil
+        } ?? false
+        guard !hasActiveSession else { return }
+        monitoringBeganInsideTriggerIDs.insert(triggerId)
     }
 
     /// Registration is an adapter concern. Persisting a place must not depend

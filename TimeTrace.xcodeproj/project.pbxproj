@@ -543,7 +543,8 @@
 				CODE_SIGN_ENTITLEMENTS = TimeTrace/TimeTrace.entitlements;
 				DEVELOPMENT_TEAM = SG3N92JMS5;
 				ENABLE_USER_SCRIPT_SANDBOXING = NO;
-				GENERATE_INFOPLIST_FILE = YES;
+				GENERATE_INFOPLIST_FILE = NO;
+				INFOPLIST_FILE = TimeTrace/Info.plist;
 				INFOPLIST_KEY_CFBundleDisplayName = "时迹";
 				INFOPLIST_KEY_ITSAppUsesNonExemptEncryption = NO;
 				INFOPLIST_KEY_NSLocationAlwaysAndWhenInUseUsageDescription = "用于在后台自动记录进入和离开已添加地点的时间。";

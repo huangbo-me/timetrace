@@ -13,6 +13,18 @@ struct TodayHeroCopy: Equatable {
     let statusLabel: String
 }
 
+/// A timeline row belongs to the place that created its session, rather than
+/// to whichever workplace happened to be created first.
+enum TodayPlacePresentation {
+    static func name(for session: ActivitySession, places: [ActivityTrigger]) -> String {
+        guard let placeTriggerId = session.placeTriggerId,
+              let place = places.first(where: { $0.id == placeTriggerId }) else {
+            return "工作地点"
+        }
+        return place.displayPlaceName
+    }
+}
+
 /// Work calendars describe the work activity only. A Saturday run, study
 /// session, or other configured place is a normal activity, not overtime.
 enum TodayWorkdayRule {
@@ -70,7 +82,7 @@ struct TodayView: View {
                                     TodaySessionRow(
                                         session: session,
                                         now: timeline.date,
-                                        placeName: model.workTrigger?.displayPlaceName ?? "工作地点"
+                                        placeName: TodayPlacePresentation.name(for: session, places: model.triggers)
                                     )
                                     if index < summary.sessions.count - 1 { Divider().padding(.leading, 50) }
                                 }

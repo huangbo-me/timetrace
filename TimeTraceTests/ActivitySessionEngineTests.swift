@@ -38,6 +38,65 @@ final class ActivitySessionEngineTests: XCTestCase {
         XCTAssertEqual(secondExit.disposition, .orphaned)
     }
 
+    func testImmediateDuplicateExitForTheSameGeofenceIsRedundant() {
+        let officeId = UUID()
+        let enter = geofenceEvent(.geofenceEnter, placeId: officeId, hour: 9)
+        let exit = geofenceEvent(.geofenceExit, placeId: officeId, hour: 18)
+        let duplicateExit = ActivityEvent(
+            activityId: activityId,
+            eventType: .geofenceExit,
+            timestamp: exit.timestamp.addingTimeInterval(1),
+            source: .coreLocation,
+            metadata: EventMetadata(values: ["placeTriggerId": officeId.uuidString])
+        )
+
+        let result = engine.reconcile(
+            events: [enter, exit, duplicateExit],
+            existingSessions: [],
+            now: date(day: 1, hour: 19)
+        )
+
+        XCTAssertEqual(result.sessions.count, 1)
+        XCTAssertEqual(result.sessions.first?.endEventId, exit.id)
+        XCTAssertEqual(duplicateExit.disposition, .redundant)
+    }
+
+    func testEachGeofencePairsOnlyWithItsOwnExit() {
+        let homeId = UUID()
+        let officeId = UUID()
+        let homeEnter = geofenceEvent(.geofenceEnter, placeId: homeId, hour: 8)
+        let officeEnter = geofenceEvent(.geofenceEnter, placeId: officeId, hour: 9)
+        let homeExit = geofenceEvent(.geofenceExit, placeId: homeId, hour: 9, minute: 5)
+        let officeExit = geofenceEvent(.geofenceExit, placeId: officeId, hour: 18)
+
+        let result = engine.reconcile(
+            events: [homeEnter, officeEnter, homeExit, officeExit],
+            existingSessions: [],
+            now: date(day: 1, hour: 19)
+        )
+
+        XCTAssertEqual(result.sessions.count, 2)
+        XCTAssertEqual(result.sessions.first { $0.placeTriggerId == homeId }?.endEventId, homeExit.id)
+        XCTAssertEqual(result.sessions.first { $0.placeTriggerId == officeId }?.endEventId, officeExit.id)
+        XCTAssertEqual(officeEnter.disposition, .applied)
+        XCTAssertEqual(officeExit.disposition, .applied)
+    }
+
+    func testExitAfterMonitoringBeginsInsideDoesNotAskForAnInventedArrival() {
+        let homeId = UUID()
+        let initialExit = geofenceEvent(
+            .geofenceExit,
+            placeId: homeId,
+            hour: 8,
+            metadata: ["monitoringBeganInside": "true"]
+        )
+
+        let result = engine.reconcile(events: [initialExit], existingSessions: [], now: date(day: 1, hour: 9))
+
+        XCTAssertTrue(result.sessions.isEmpty)
+        XCTAssertEqual(initialExit.disposition, .redundant)
+    }
+
     func testExitWithoutEnterIsOrphaned() {
         let exit = event(.geofenceExit, 18)
         let result = engine.reconcile(events: [exit], existingSessions: [], now: date(day: 1, hour: 19))
@@ -160,6 +219,19 @@ final class ActivitySessionEngineTests: XCTestCase {
                        source: ActivityEventSource = .coreLocation) -> ActivityEvent {
         ActivityEvent(activityId: activityId, eventType: type,
                       timestamp: date(day: 1, hour: hour, minute: minute), source: source)
+    }
+
+    private func geofenceEvent(_ type: ActivityEventType, placeId: UUID, hour: Int, minute: Int = 0,
+                                metadata: [String: String] = [:]) -> ActivityEvent {
+        var values = metadata
+        values["placeTriggerId"] = placeId.uuidString
+        return ActivityEvent(
+            activityId: activityId,
+            eventType: type,
+            timestamp: date(day: 1, hour: hour, minute: minute),
+            source: .coreLocation,
+            metadata: EventMetadata(values: values)
+        )
     }
 
     private func date(day: Int, hour: Int, minute: Int = 0) -> Date {

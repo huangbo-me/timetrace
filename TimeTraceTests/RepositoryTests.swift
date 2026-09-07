@@ -23,6 +23,36 @@ final class RepositoryTests: XCTestCase {
         )
     }
 
+    func testTodayTimelineUsesThePlaceBoundToEachSession() {
+        let activity = ActivityDefinition(name: "工作", type: .work)
+        let home = ActivityTrigger(
+            activityId: activity.id,
+            type: .geofence,
+            latitude: 31.2,
+            longitude: 121.4,
+            radius: 200,
+            placeName: "梧桐湾"
+        )
+        let office = ActivityTrigger(
+            activityId: activity.id,
+            type: .geofence,
+            latitude: 31.21,
+            longitude: 121.41,
+            radius: 200,
+            placeName: "滴滴出行"
+        )
+        let officeSession = ActivitySession(
+            activityId: activity.id,
+            placeTriggerId: office.id,
+            startAt: Date(timeIntervalSince1970: 1_000)
+        )
+
+        XCTAssertEqual(
+            TodayPlacePresentation.name(for: officeSession, places: [home, office]),
+            "滴滴出行"
+        )
+    }
+
     func testValueMapperDetachesPresentationDataFromSwiftDataRecord() {
         let activity = ActivityDefinition(name: "工作", type: .work)
         let trigger = ActivityTrigger(
@@ -272,6 +302,70 @@ final class RepositoryTests: XCTestCase {
         XCTAssertTrue(model.events.contains { $0.eventType == .anomalyDismissed })
     }
 
+    func testExitFromPlaceAddedWhileAlreadyInsideDoesNotBecomeAnArrivalAnomaly() throws {
+        let geofence = FakeGeofenceService()
+        let model = AppModel(inMemory: true, geofence: geofence,
+                             notifications: FakeNotificationService())
+        model.load()
+        model.finishOnboarding(latitude: 31.2, longitude: 121.4, radius: 200,
+                               weekdaysMask: 0b0111110, normalStartMinute: nil, normalEndMinute: nil)
+        let triggerId = try XCTUnwrap(model.workTrigger?.id)
+
+        geofence.emitState(triggerId: triggerId, state: .inside)
+        geofence.emit(.exited(triggerId: triggerId, timestamp: Date()))
+
+        XCTAssertTrue(model.orphanedWorkExitEvents.isEmpty)
+        XCTAssertEqual(model.events.last?.disposition, .redundant)
+    }
+
+    func testRefreshReprocessesLegacyImmediateDuplicateExit() throws {
+        let geofence = FakeGeofenceService()
+        let model = AppModel(inMemory: true, geofence: geofence,
+                             notifications: FakeNotificationService())
+        model.load()
+        model.finishOnboarding(latitude: 31.2, longitude: 121.4, radius: 200,
+                               weekdaysMask: 0b0111110, normalStartMinute: nil, normalEndMinute: nil,
+                               placeName: "家")
+        model.addWorkplace(latitude: 31.3, longitude: 121.5, radius: 200,
+                           placeName: "公司", placeType: .work)
+        let officeId = try XCTUnwrap(model.workTriggers.first { $0.displayPlaceName == "公司" }?.id)
+        let arrival = Date().addingTimeInterval(-3_600)
+        let departure = Date().addingTimeInterval(-1_800)
+        geofence.emit(.entered(triggerId: officeId, timestamp: arrival))
+        geofence.emit(.exited(triggerId: officeId, timestamp: departure))
+        geofence.emit(.exited(triggerId: officeId, timestamp: departure.addingTimeInterval(1)))
+        let duplicate = try XCTUnwrap(model.events.last)
+        // Simulate data recorded by a pre-fix release.
+        duplicate.disposition = .orphaned
+
+        model.refreshSyncedData()
+
+        XCTAssertEqual(duplicate.disposition, .redundant)
+        XCTAssertTrue(model.orphanedWorkExitEvents.isEmpty)
+    }
+
+    func testPublishingDataNormalizesLegacyDuplicateExitAfterCloudMerge() throws {
+        let geofence = FakeGeofenceService()
+        let model = AppModel(inMemory: true, geofence: geofence,
+                             notifications: FakeNotificationService())
+        model.load()
+        model.finishOnboarding(latitude: 31.2, longitude: 121.4, radius: 200,
+                               weekdaysMask: 0b0111110, normalStartMinute: nil, normalEndMinute: nil)
+        let triggerId = try XCTUnwrap(model.workTrigger?.id)
+        let arrival = Date().addingTimeInterval(-3_600)
+        let departure = Date().addingTimeInterval(-1_800)
+        geofence.emit(.entered(triggerId: triggerId, timestamp: arrival))
+        geofence.emit(.exited(triggerId: triggerId, timestamp: departure))
+        geofence.emit(.exited(triggerId: triggerId, timestamp: departure.addingTimeInterval(1)))
+        let duplicate = try XCTUnwrap(model.events.last)
+        duplicate.disposition = .orphaned
+
+        model.refreshSyncedData()
+
+        XCTAssertEqual(duplicate.disposition, .redundant)
+        XCTAssertTrue(model.orphanedWorkExitEvents.isEmpty)
+    }
+
     func testLocationAuthorizationChangesArePublished() throws {
         let geofence = FakeGeofenceService()
         geofence.authorizationStatus = .authorizedWhenInUse
@@ -427,6 +521,7 @@ private final class FakeGeofenceService: GeofenceServicing {
     var lastHorizontalAccuracy: CLLocationAccuracy? = 10
     var onEvent: ((GeofenceSystemEvent) -> Void)?
     var onAuthorizationChange: ((CLAuthorizationStatus) -> Void)?
+    var onRegionState: ((UUID, CLRegionState) -> Void)?
     private(set) var registeredTriggerIds: [UUID] = []
     private(set) var removedTriggerIds: [UUID] = []
     var shouldFailRegistration = false
@@ -444,6 +539,7 @@ private final class FakeGeofenceService: GeofenceServicing {
     func remove(triggerId: UUID) { removedTriggerIds.append(triggerId) }
     func restoreAndRequestState(triggerId: UUID, latitude: Double, longitude: Double, radius: Double) {}
     func emit(_ event: GeofenceSystemEvent) { onEvent?(event) }
+    func emitState(triggerId: UUID, state: CLRegionState) { onRegionState?(triggerId, state) }
     func setAuthorizationStatus(_ status: CLAuthorizationStatus) {
         authorizationStatus = status
         onAuthorizationChange?(status)

@@ -53,7 +53,53 @@ https://github.com/huangbo-me/timetrace
 
 **审核备注**
 
-本 App 无需账户即可使用。首次打开会引导用户设置记录地点；自动记录依赖系统定位权限。请在模拟器或测试设备中完成引导后，到“地点”添加地点，并允许定位权限，以验证进入和离开地点时的自动记录体验。应用不保存连续位置轨迹。
+提交前请将以下英文内容粘贴到 App Store Connect 的“App Review Information → Notes”，并在 Resolution Center 回复中附上真机录屏。方括号内容必须替换为本次提交的真实设备、系统版本及录屏链接。
+
+```text
+Screen recording
+A screen recording captured on a physical [iPhone model] running iOS [version] is attached in Resolution Center and is also available at: [unlisted video URL].
+
+The recording begins by launching the app and demonstrates the standard flow: completing the initial place setup, granting location and notification permissions, creating and viewing a place-based geofence, viewing Today, History, and Insights, creating a local reminder, and reviewing iCloud sync status in Settings.
+
+App purpose and target audience
+TimeTrace (时迹) is a personal, place-based time-recording app for individual users, including office workers, students, and people tracking time spent at regular places such as workplaces, libraries, or gyms.
+
+Users create one or more places and choose a geofence radius. When the device enters or exits a configured place, the app records the corresponding time session. Users can also review, correct, and manually add records. The app helps users reduce manual time tracking while keeping a clear history and summary of time spent.
+
+Setup and access instructions
+No account registration, login, or demo credentials are required.
+
+1. Launch the app.
+2. During onboarding, create a place by selecting a location on the map or using the current location.
+3. Allow location access. “Always Allow” is needed for background geofence-based automatic recording.
+4. Allow notifications to receive optional local entry, exit, and reminder alerts.
+5. Use the Places tab to add or edit places; use Today, History, and Insights to review records and statistics.
+6. The app remains usable locally if the reviewer is not signed in to iCloud. iCloud sync is optional.
+
+External services, tools, and platforms
+The app does not use third-party SDKs, advertising networks, analytics services, authentication services, payment processors, AI services, or external user-content services.
+
+Its core functionality uses Apple system frameworks and services:
+- Core Location for circular geofence monitoring and optional current-location selection.
+- MapKit and Apple Maps data for map display and place search.
+- UserNotifications for local reminders and optional geofence entry/exit notifications.
+- SwiftData for on-device storage.
+- Optional Apple CloudKit private database sync through the user’s own iCloud account (container: iCloud.com.chronora.time.trace).
+
+Regional availability
+There are no intentionally different app features, content catalogs, prices, or user flows by region. The app is currently presented in Simplified Chinese. Map search results can vary according to Apple Maps availability and data in the user’s region; core local recording functionality is otherwise the same.
+
+Regulated industries and third-party material
+The app is not a regulated-industry service and does not provide medical, financial, legal, or other regulated advice. It does not distribute protected third-party content.
+```
+
+**真机验收清单**
+
+1. 在最新 iOS 的实体 iPhone 上从主屏幕开始录屏并启动新安装的 App。
+2. 完成首次地点设置；允许“使用 App 期间”和后续的“始终允许”定位权限，以及通知权限。
+3. 验证地点保存、今日记录、历史、统计、提醒和设置页 iCloud 状态均可正常进入。
+4. 单独进行实际进入和离开围栏的测试：确认后台唤醒后的记录与本地通知；不要以模拟器结果代替真机结论。
+5. 若要在 Notes 放录屏链接，使用审核员无需登录即可访问、不会过期的非公开链接；同时在 Resolution Center 上传原始录屏文件。
 
 ## App 隐私申报
 

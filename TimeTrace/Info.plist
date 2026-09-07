@@ -26,13 +26,21 @@
     <true/>
     <key>NSLocationAlwaysAndWhenInUseUsageDescription</key>
     <string>用于在后台自动记录进入和离开已添加地点的时间。</string>
-    <key>NSLocationWhenInUseUsageDescription</key>
-    <string>用于设置地点并监测围栏进出。</string>
-    <key>UILaunchScreen</key>
+	<key>NSLocationWhenInUseUsageDescription</key>
+	<string>用于设置地点并监测围栏进出。</string>
+	<key>UIApplicationSceneManifest</key>
+	<dict>
+		<key>UIApplicationSupportsMultipleScenes</key>
+		<true/>
+		<key>UISceneConfigurations</key>
+		<dict/>
+	</dict>
+	<key>UILaunchScreen</key>
     <dict/>
-    <key>UIBackgroundModes</key>
-    <array>
-        <string>remote-notification</string>
-    </array>
+	<key>UIBackgroundModes</key>
+	<array>
+		<string>location</string>
+		<string>remote-notification</string>
+	</array>
 </dict>
 </plist>
