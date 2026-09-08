@@ -8,7 +8,6 @@ struct SettingsView: View {
     @Environment(\.openURL) private var openURL
     @AppStorage("profileNickname") private var profileNickname = ""
     @State private var showingPlaces = false
-    @State private var showingICloudHelp = false
 
     private var model: AppModel { store.application }
 #if DEBUG
@@ -48,88 +47,49 @@ struct SettingsView: View {
                     }
                 }
 
-                TTSectionTitle(title: "iCloud 同步")
+                TTSectionTitle(title: "数据管理")
                 TTCard {
-                    Button {
-                        if model.iCloudSyncStatus == .notEnabled {
-                            showingICloudHelp = true
-                        } else {
-                            model.refreshICloudSyncStatus()
-                        }
+                    NavigationLink {
+                        DataBackupView()
                     } label: {
                         HStack(spacing: 12) {
-                            TTIcon(systemName: iCloudIcon, tint: iCloudTint, size: 42)
+                            TTIcon(systemName: "externaldrive.fill", tint: TimeTraceDesign.blue, size: 36)
                             VStack(alignment: .leading, spacing: 3) {
-                                Text(model.iCloudSyncStatus.title)
-                                    .font(.subheadline.weight(.medium))
-                                    .foregroundStyle(TimeTraceDesign.ink)
-                                Text(model.iCloudSyncStatus.detail)
-                                    .font(.caption)
-                                    .foregroundStyle(TimeTraceDesign.muted)
-                                    .multilineTextAlignment(.leading)
+                                Text("数据备份").font(.subheadline.weight(.medium)).foregroundStyle(TimeTraceDesign.ink)
+                                Text("iCloud 同步、数据导入与导出").font(.caption).foregroundStyle(TimeTraceDesign.muted)
                             }
-                            Spacer(minLength: 8)
-                            if model.iCloudSyncStatus == .checking {
-                                ProgressView().controlSize(.small)
-                            } else {
-                                Image(systemName: "arrow.clockwise")
-                                    .font(.subheadline.weight(.semibold))
-                                    .foregroundStyle(TimeTraceDesign.muted)
-                            }
+                            Spacer()
+                            Image(systemName: "chevron.right").font(.caption.weight(.bold)).foregroundStyle(TimeTraceDesign.muted)
                         }
                         .frame(maxWidth: .infinity, alignment: .leading)
                         .contentShape(Rectangle())
                     }
                     .buttonStyle(.plain)
-                    .accessibilityHint("轻点重新检查 iCloud 同步状态")
                 }
 
+                TTSectionTitle(title: "活动提醒")
                 TTCard {
-                    VStack(alignment: .leading, spacing: 14) {
-                        HStack {
-                            Text("同步范围")
-                                .font(.subheadline.weight(.semibold))
+                    NavigationLink {
+                        ReminderManagementView()
+                    } label: {
+                        HStack(spacing: 12) {
+                            TTIcon(systemName: "bell.badge", tint: TimeTraceDesign.violet, size: 36)
+                            VStack(alignment: .leading, spacing: 3) {
+                                Text("管理提醒").font(.subheadline.weight(.medium))
+                                Text("\(model.reminders.count) 个提醒 · 添加、编辑与删除")
+                                    .font(.caption).foregroundStyle(TimeTraceDesign.muted)
+                            }
                             Spacer()
-                            Text(iCloudScopeStatus)
-                                .font(.caption.weight(.medium))
-                                .foregroundStyle(iCloudScopeTint)
+                            Image(systemName: "chevron.right").font(.caption.weight(.bold))
                         }
-                        Text(iCloudScopeExplanation)
-                            .font(.caption)
-                            .foregroundStyle(TimeTraceDesign.muted)
-
-                        Divider()
-                        iCloudScopeRow(
-                            title: "活动与地点",
-                            detail: "\(model.activities.count) 个活动 · \(model.triggers.filter { $0.type == .geofence }.count) 个地点\n名称、围栏位置、半径和自动记录设置",
-                            systemImage: "mappin.and.ellipse",
-                            syncs: true
-                        )
-                        Divider()
-                        iCloudScopeRow(
-                            title: "时间记录",
-                            detail: "\(model.sessions.count) 段会话 · \(model.events.count) 条事件\n到达、离开、手动补齐和汇总依据",
-                            systemImage: "clock.arrow.circlepath",
-                            syncs: true
-                        )
-                        Divider()
-                        iCloudScopeRow(
-                            title: "本机围栏注册",
-                            detail: "不会直接同步；地点恢复到本机后会重新注册",
-                            systemImage: "iphone",
-                            syncs: false
-                        )
-                        Divider()
-                        iCloudScopeRow(
-                            title: "连续位置轨迹",
-                            detail: "不会收集，也不会上传到 iCloud",
-                            systemImage: "location.slash",
-                            syncs: false
-                        )
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                        .contentShape(Rectangle())
                     }
+                    .buttonStyle(.plain)
                 }
 
                 TTSectionTitle(title: "自动记录")
+                TTLocationPermissionNotice(status: model.locationAuthorizationStatus)
                 TTCard {
                     VStack(spacing: 14) {
                         settingsRow("定位权限", detail: authorizationText, icon: "location.fill", tint: TimeTraceDesign.blue) {
@@ -141,14 +101,13 @@ struct SettingsView: View {
                         }
                         Divider()
                         HStack(spacing: 12) {
-                            TTIcon(systemName: "checkmark.circle.fill", tint: .green, size: 36)
+                            TTIcon(systemName: "location.fill", tint: TimeTraceDesign.blue, size: 36)
                             VStack(alignment: .leading, spacing: 2) {
                                 Text("自动记录").font(.subheadline.weight(.medium))
-                                Text("到达任一地点后自动开始，离开后自动结束")
+                                Text(model.automaticRecordingDetail)
                                     .font(.caption).foregroundStyle(TimeTraceDesign.muted)
                             }
                             Spacer()
-                            Toggle("", isOn: .constant(true)).labelsHidden().disabled(true)
                         }
                         if case .unavailable(let message) = model.geofenceCapabilityStatus {
                             TTCapabilityNotice(message: message)
@@ -206,11 +165,6 @@ struct SettingsView: View {
         .timeTraceScreen()
         .timeTraceTabTitle("设置")
         .sheet(isPresented: $showingPlaces) { PlacesView() }
-        .alert("开启 iCloud 同步", isPresented: $showingICloudHelp) {
-            Button("知道了", role: .cancel) {}
-        } message: {
-            Text("请前往“设置”> 您的姓名 > iCloud > 已存储到 iCloud，找到“时迹”并开启同步。开启后请完全退出并重新打开时迹，新的本地数据库才会接入 iCloud。")
-        }
 #if DEBUG
         .alert("演示数据", isPresented: $showingDemoResult) {
             Button("好", role: .cancel) {}
@@ -285,89 +239,6 @@ struct SettingsView: View {
         }
     }
 
-    private var iCloudScopeStatus: String {
-        switch model.iCloudSyncStatus {
-        case .enabled: "已纳入 iCloud"
-        case .checking: "正在确认"
-        case .unavailable: "等待 iCloud"
-        case .notEnabled, .signedOut, .restricted: "仅本机"
-        }
-    }
-
-    private var iCloudScopeTint: Color {
-        switch model.iCloudSyncStatus {
-        case .enabled: .green
-        case .checking, .unavailable: TimeTraceDesign.blue
-        case .notEnabled, .signedOut, .restricted: TimeTraceDesign.muted
-        }
-    }
-
-    private var iCloudScopeExplanation: String {
-        switch model.iCloudSyncStatus {
-        case .enabled:
-            return "已纳入 iCloud 表示此类数据会同步；实际上传和下载时间取决于网络及系统状态。"
-        case .checking:
-            return "正在确认这台设备能否使用 iCloud；确认完成前不会把数据误标为已同步。"
-        case .unavailable:
-            return "iCloud 暂时不可用；数据会先留在本机，恢复可用后系统会再次尝试同步。"
-        case .notEnabled:
-            return "当前使用本机存储。请确认已登录 iCloud，并重新启动应用以重新检查同步配置。"
-        case .signedOut, .restricted:
-            return "iCloud 当前不可用时，下面所有数据只保留在本机；恢复可用后会再次参与同步。"
-        }
-    }
-
-    private func iCloudScopeRow(title: String, detail: String, systemImage: String, syncs: Bool) -> some View {
-        HStack(alignment: .top, spacing: 12) {
-            TTIcon(systemName: systemImage, tint: syncs ? TimeTraceDesign.blue : TimeTraceDesign.muted, size: 34)
-            VStack(alignment: .leading, spacing: 3) {
-                Text(title).font(.subheadline.weight(.medium))
-                Text(detail)
-                    .font(.caption)
-                    .foregroundStyle(TimeTraceDesign.muted)
-                    .fixedSize(horizontal: false, vertical: true)
-            }
-            Spacer(minLength: 8)
-            Text(syncs ? iCloudScopeStatus : "不同步")
-                .font(.caption.weight(.medium))
-                .foregroundStyle(syncs ? iCloudScopeTint : TimeTraceDesign.muted)
-                .multilineTextAlignment(.trailing)
-        }
-    }
-
-    private var iCloudIcon: String {
-        switch model.iCloudSyncStatus {
-        case .enabled: "checkmark.icloud.fill"
-        case .checking: "icloud"
-        case .notEnabled, .signedOut, .restricted, .unavailable: "exclamationmark.icloud.fill"
-        }
-    }
-
-    private var iCloudTint: Color {
-        switch model.iCloudSyncStatus {
-        case .enabled: .green
-        case .checking: TimeTraceDesign.blue
-        case .notEnabled, .signedOut, .restricted, .unavailable: .orange
-        }
-    }
-
-    @ViewBuilder
-    private var authorizationAction: some View {
-        switch model.locationAuthorizationStatus {
-        case .authorizedAlways:
-            Label("后台自动记录已开启", systemImage: "checkmark.circle.fill")
-                .foregroundStyle(.green)
-        case .authorizedWhenInUse:
-            Button("在系统设置中改为“始终”") { openSystemSettings() }
-        case .denied, .restricted:
-            Button("打开系统定位设置") { openSystemSettings() }
-        case .notDetermined:
-            Button("请求始终允许") { model.geofence.requestAlwaysAuthorization() }
-        @unknown default:
-            Button("打开系统定位设置") { openSystemSettings() }
-        }
-    }
-
     private func openSystemSettings() {
         guard let url = URL(string: UIApplication.openSettingsURLString) else { return }
         openURL(url)
@@ -382,6 +253,7 @@ struct WorkplaceEditorView: View {
     @State private var radius: Double
     @State private var placeName = ""
     @State private var placeType: PlaceType = .work
+    @State private var placeEnabled = true
     @State private var locationAccuracy: CLLocationAccuracy?
     @State private var usesReducedAccuracy = false
     @State private var showingDeleteConfirmation = false
@@ -404,6 +276,11 @@ struct WorkplaceEditorView: View {
         NavigationStack {
             Form {
                 TextField("地点名称，例如：公司、办公室或客户现场", text: $placeName)
+                if let trigger, !trigger.isDemoData {
+                    Toggle("启用地点自动记录", isOn: $placeEnabled)
+                    Text("停用后不再接收此地点的进出事件；已有记录保留，进行中的记录可在历史中补齐。")
+                        .font(.caption).foregroundStyle(.secondary)
+                }
                 Section("地点类型") {
                     Picker("类型", selection: $placeType) {
                         ForEach(PlaceType.allCases) { type in
@@ -461,23 +338,26 @@ struct WorkplaceEditorView: View {
                     )
                     placeName = trigger.displayPlaceName
                     placeType = trigger.placeType
+                    placeEnabled = trigger.isEnabled
                 }
             }
             .toolbar {
                 ToolbarItem(placement: .cancellationAction) { Button("取消") { dismiss() } }
                 ToolbarItem(placement: .confirmationAction) {
                     Button("保存") {
+                        let saved: Bool
                         if let trigger {
-                            model.updateWorkplace(
+                            saved = model.updateWorkplace(
                                 triggerId: trigger.id,
                                 latitude: coordinate.latitude,
                                 longitude: coordinate.longitude,
                                 radius: radius,
                                 placeName: placeName,
-                                placeType: placeType
+                                placeType: placeType,
+                                isEnabled: placeEnabled
                             )
                         } else {
-                            model.addWorkplace(
+                            saved = model.addWorkplace(
                                 latitude: coordinate.latitude,
                                 longitude: coordinate.longitude,
                                 radius: radius,
@@ -485,7 +365,7 @@ struct WorkplaceEditorView: View {
                                 placeType: placeType
                             )
                         }
-                        dismiss()
+                        if saved { dismiss() }
                     }
                     .disabled(placeName.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
                 }
@@ -502,8 +382,7 @@ struct WorkplaceEditorView: View {
             .confirmationDialog("删除地点？", isPresented: $showingDeleteConfirmation, titleVisibility: .visible) {
                 Button("删除", role: .destructive) {
                     guard let trigger else { return }
-                    model.deleteWorkplace(trigger)
-                    dismiss()
+                    if model.deleteWorkplace(trigger) { dismiss() }
                 }
             } message: {
                 Text("将停止监测并删除“\(trigger?.displayPlaceName ?? "")”。")
@@ -532,6 +411,157 @@ struct WorkplaceEditorView: View {
                 error,
                 fallback: "暂时无法获取当前位置，请稍后重试。"
             )
+        }
+    }
+}
+
+
+private struct ReminderManagementView: View {
+    @EnvironmentObject private var store: SettingsFeatureStore
+    @Environment(\.openURL) private var openURL
+    @Environment(\.scenePhase) private var scenePhase
+    @State private var adding = false
+    @State private var editing: ReminderDefinition?
+    private var model: AppModel { store.application }
+
+    var body: some View {
+        List {
+            if model.notificationCapabilityStatus != .available {
+                Section {
+                    Text("通知未获授权或暂不可用，提醒仍会保存。请检查系统通知设置。")
+                        .font(.subheadline).foregroundStyle(.orange)
+                    Button("前往系统设置") {
+                        if let url = URL(string: UIApplication.openSettingsURLString) { openURL(url) }
+                    }
+                    Button("重新检查并安排通知") {
+                        Task {
+                            await model.refreshNotificationAuthorization()
+                            await model.reconcileReminders()
+                        }
+                    }
+                }
+            }
+            Section {
+                Button("添加提醒", systemImage: "plus") { adding = true }
+                ForEach(model.reminders, id: \.id) { reminder in
+                    Button { editing = reminder } label: {
+                        HStack {
+                            VStack(alignment: .leading, spacing: 5) {
+                                Text(reminder.name).foregroundStyle(TimeTraceDesign.ink)
+                                Text(String(format: "%02d:%02d", reminder.hour, reminder.minute) + " · " + weekdayText(reminder.weekdaysMask))
+                                    .font(.caption).foregroundStyle(.secondary)
+                            }
+                            Spacer()
+                            Text(reminder.isEnabled ? "已启用" : "已停用")
+                                .font(.caption).foregroundStyle(.secondary)
+                            Image(systemName: "chevron.right").font(.caption)
+                        }
+                        .frame(maxWidth: .infinity, alignment: .leading).contentShape(Rectangle())
+                    }
+                }
+            } footer: {
+                Text("点击提醒可编辑或删除。通知中可开始、延后或跳过；开始后可在今天页完成活动。")
+            }
+        }
+        .navigationTitle("活动提醒")
+        .sheet(isPresented: $adding) { ReminderEditorView(reminder: nil) }
+        .sheet(item: $editing) { ReminderEditorView(reminder: $0) }
+        .task { await model.refreshNotificationAuthorization() }
+        .onChange(of: scenePhase) { _, phase in
+            if phase == .active { Task { await model.refreshNotificationAuthorization() } }
+        }
+    }
+
+    private func weekdayText(_ mask: Int) -> String {
+        if mask & 127 == 127 { return "每天" }
+        return [(2, "周一"), (3, "周二"), (4, "周三"), (5, "周四"), (6, "周五"), (7, "周六"), (1, "周日")]
+            .filter { mask.containsWeekday($0.0) }.map { $0.1 }.joined(separator: "、")
+    }
+}
+
+private struct ReminderEditorView: View {
+    @EnvironmentObject private var store: SettingsFeatureStore
+    @Environment(\.dismiss) private var dismiss
+    @State private var name: String
+    @State private var time: Date
+    @State private var weekdays: Int
+    @State private var enabled: Bool
+    @State private var type: ActivityType = .custom
+    @State private var busy = false
+    @State private var confirmingDelete = false
+    @State private var error: String?
+    let reminder: ReminderDefinition?
+    private var model: AppModel { store.application }
+
+    init(reminder: ReminderDefinition?) {
+        self.reminder = reminder
+        _name = State(initialValue: reminder?.name ?? "")
+        _time = State(initialValue: Calendar.current.date(from: DateComponents(hour: reminder?.hour ?? 21, minute: reminder?.minute ?? 0)) ?? Date())
+        _weekdays = State(initialValue: reminder?.weekdaysMask ?? 127)
+        _enabled = State(initialValue: reminder?.isEnabled ?? true)
+    }
+
+    var body: some View {
+        NavigationStack {
+            Form {
+                Section("提醒内容") {
+                    TextField("提醒名称", text: $name)
+                    if reminder == nil {
+                        Picker("活动类型", selection: $type) {
+                            ForEach(ActivityType.allCases) { value in Text(value.displayName).tag(value) }
+                        }
+                    }
+                    DatePicker("提醒时间", selection: $time, displayedComponents: .hourAndMinute)
+                    if reminder != nil { Toggle("启用提醒", isOn: $enabled) }
+                }
+                Section("重复日期") { WeekdayPicker(mask: $weekdays) }
+                if let error { Text(error).foregroundStyle(.red) }
+                if busy { ProgressView("正在保存…") }
+                if reminder != nil {
+                    Section {
+                        Button("删除提醒", role: .destructive) { confirmingDelete = true }
+                    } footer: {
+                        Text("删除或停用只影响后续通知，已有活动记录保留。")
+                    }
+                }
+            }
+            .disabled(busy)
+            .navigationTitle(reminder == nil ? "添加提醒" : "编辑提醒")
+            .toolbar {
+                ToolbarItem(placement: .cancellationAction) { Button("取消") { dismiss() }.disabled(busy) }
+                ToolbarItem(placement: .confirmationAction) {
+                    Button("保存") { save() }
+                        .disabled(busy || name.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || weekdays & 127 == 0)
+                }
+            }
+            .confirmationDialog("删除这个提醒？", isPresented: $confirmingDelete, titleVisibility: .visible) {
+                Button("删除提醒", role: .destructive) {
+                    guard let reminder else { return }
+                    busy = true
+                    Task {
+                        defer { busy = false }
+                        if await model.deleteReminder(reminder) { dismiss() }
+                        else { error = model.lastError }
+                    }
+                }
+            } message: { Text("对应的待发送和已送达通知会清理，已有活动记录保留。") }
+            .interactiveDismissDisabled(busy)
+        }
+    }
+
+    private func save() {
+        busy = true
+        error = nil
+        Task {
+            defer { busy = false }
+            let saved: Bool
+            if let reminder {
+                saved = await model.updateReminder(id: reminder.id, name: name, time: time,
+                                                   weekdaysMask: weekdays, isEnabled: enabled)
+            } else {
+                saved = await model.createReminder(name: name, type: type, time: time, weekdaysMask: weekdays)
+            }
+            if saved { dismiss() } else { error = model.lastError }
         }
     }
 }

@@ -39,6 +39,9 @@
 		E5CA9DD22D2E7E577F8F5166 /* Repositories.swift in Sources */ = {isa = PBXBuildFile; fileRef = FA051CBD13B8FE1C6BC6C0CF /* Repositories.swift */; };
 		E79530DECA05CC38167CB7C0 /* ActivitySessionEngineTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = B88436FEFD9ABF305B0A4F2E /* ActivitySessionEngineTests.swift */; };
 		EA05E34BAB96ED1DE3730B9E /* NotificationService.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1BD12114479E523E35118D2C /* NotificationService.swift */; };
+		BAC000000000000000000002 /* DataBackupService.swift in Sources */ = {isa = PBXBuildFile; fileRef = BAC000000000000000000001; };
+		BAC000000000000000000012 /* BackupArchive.swift in Sources */ = {isa = PBXBuildFile; fileRef = BAC000000000000000000011; };
+		BAC000000000000000000022 /* DataBackupView.swift in Sources */ = {isa = PBXBuildFile; fileRef = BAC000000000000000000021; };
 /* End PBXBuildFile section */
 
 /* Begin PBXContainerItemProxy section */
@@ -86,6 +89,9 @@
 		FA051CBD13B8FE1C6BC6C0CF /* Repositories.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; name = Repositories.swift; path = Domain/Repositories.swift; sourceTree = "<group>"; };
 		FC21C2C427EF3ABA49E4FD97 /* RootView.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; name = RootView.swift; path = App/RootView.swift; sourceTree = "<group>"; };
 		FFA12FB05A9EF3B7EA35BB97 /* TimeTraceTests.xctest */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = TimeTraceTests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
+		BAC000000000000000000001 /* DataBackupService.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; name = DataBackupService.swift; path = Persistence/DataBackupService.swift; sourceTree = "<group>"; };
+		BAC000000000000000000011 /* BackupArchive.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; name = BackupArchive.swift; path = Services/BackupArchive.swift; sourceTree = "<group>"; };
+		BAC000000000000000000021 /* DataBackupView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; name = DataBackupView.swift; path = Features/Settings/DataBackupView.swift; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
 /* Begin PBXFrameworksBuildPhase section */
@@ -162,6 +168,9 @@
 				CF38E3E3DE3C88A18B8978E6 /* InsightsView.swift */,
 				58DA95C57AFB8C79AE737E1C /* OnboardingView.swift */,
 				F1708C60FEB722FF3C8FCBB9 /* SettingsView.swift */,
+				BAC000000000000000000021 /* DataBackupView.swift */,
+				BAC000000000000000000011 /* BackupArchive.swift */,
+				BAC000000000000000000001 /* DataBackupService.swift */,
 				50BF84353EFFDAEE4393C589 /* Formatting.swift */,
 				A41C9B000000000000000003 /* TimeTraceDesign.swift */,
 				3A81819DE2BCF9B5760AC4EA /* TodayView.swift */,
@@ -324,6 +333,9 @@
 				1A2407FAB81AF203130FBCEE /* InsightsView.swift in Sources */,
 				172BC73ED37386F1886E44F1 /* OnboardingView.swift in Sources */,
 				581F4BFD3D6732DBD5F50865 /* SettingsView.swift in Sources */,
+				BAC000000000000000000022 /* DataBackupView.swift in Sources */,
+				BAC000000000000000000012 /* BackupArchive.swift in Sources */,
+				BAC000000000000000000002 /* DataBackupService.swift in Sources */,
 				8B668B4043C7846102F1CF72 /* Formatting.swift in Sources */,
 				A41C9B000000000000000001 /* TimeTraceDesign.swift in Sources */,
 				0789BC4A055BC967818A77ED /* TodayView.swift in Sources */,

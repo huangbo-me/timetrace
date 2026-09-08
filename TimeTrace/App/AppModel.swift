@@ -26,7 +26,7 @@ enum ICloudSyncStatus: Equatable {
         switch self {
         case .checking: "正在确认此设备的同步状态…"
         case .enabled: "地点、围栏设置和记录会自动同步到您的私有 iCloud 数据库"
-        case .notEnabled: "请在系统设置中为“时迹”开启 iCloud 同步"
+        case .notEnabled: "请确认系统 iCloud 设置，并重新启动时迹以重新检查存储配置"
         case .signedOut: "请登录 iCloud 后重新打开时迹以启用同步"
         case .restricted: "请检查屏幕使用时间或设备管理限制"
         case .unavailable: "暂时使用本机存储，可稍后重新检查"
@@ -54,6 +54,8 @@ final class AppModel: ObservableObject {
     let geofence: GeofenceServicing
     let notifications: NotificationServicing
     let analytics: AnalyticsServicing
+
+    private var dataBackupService: DataBackupService?
 
     private let activityRepository: ActivityRepository
     private let eventRepository: ActivityEventRepository
@@ -84,6 +86,18 @@ final class AppModel: ObservableObject {
     var workTrigger: ActivityTrigger? {
         workTriggers.first
     }
+    var automaticRecordingDetail: String {
+        guard workTriggers.contains(where: { $0.isEnabled && !$0.isDemoData }) else {
+            return "请先在地点页添加或启用地点"
+        }
+        switch geofenceCapabilityStatus {
+        case .available: return "已配置地点围栏；系统检测到进出时自动记录，休息日也会记录"
+        case .needsAuthorization: return "请在系统设置中允许“始终”定位，以使用后台自动记录"
+        case .restricted: return "定位权限不可用，请在系统设置中检查定位授权"
+        case .unavailable(let message): return message
+        }
+    }
+
     var isOnboarded: Bool { workActivity != nil }
     var activeReminderInstances: [ReminderInstance] { reminderInstances.filter { $0.status == .inProgress } }
     var orphanedWorkExitEvents: [ActivityEvent] {
@@ -128,6 +142,7 @@ final class AppModel: ObservableObject {
         self.geofenceCapabilityStatus = .geofence(for: geofence.authorizationStatus)
         do {
             let persistence = try PersistenceController(inMemory: inMemory)
+            dataBackupService = DataBackupService(container: persistence.container)
             isCloudKitEnabled = cloudKitEnabledOverride ?? persistence.isCloudKitEnabled
             let activities = SwiftDataActivityRepository(context: persistence.context)
             let events = SwiftDataActivityEventRepository(context: persistence.context)
@@ -195,6 +210,26 @@ final class AppModel: ObservableObject {
             Task { [weak self] in await self?.reconcileReminders() }
         } catch {
             lastError = TimeTraceLocalization.errorMessage(error, fallback: "刷新 iCloud 数据失败，请稍后重试。")
+        }
+    }
+
+    func backupSnapshot() throws -> BackupSnapshot {
+        guard let dataBackupService else { throw BackupError.unavailable }
+        return try dataBackupService.snapshot()
+    }
+
+    /// A merge includes refreshing projections and device registrations, so
+    /// callers cannot import records without updating the rest of the app.
+    func importBackup(_ snapshot: BackupSnapshot) throws -> BackupImportResult {
+        guard let dataBackupService else { throw BackupError.unavailable }
+        let insertedCount = try dataBackupService.merge(snapshot)
+        do {
+            try refreshDataAndRestoreGeofence()
+            Task { [weak self] in await self?.reconcileReminders() }
+            return BackupImportResult(insertedCount: insertedCount, refreshWarning: nil)
+        } catch {
+            return BackupImportResult(insertedCount: insertedCount,
+                refreshWarning: "数据已保存，但刷新记录未完成，请重新打开应用后检查。")
         }
     }
 
@@ -276,19 +311,27 @@ final class AppModel: ObservableObject {
         } catch { lastError = TimeTraceLocalization.errorMessage(error, fallback: "保存地点失败，请稍后重试。") }
     }
 
+    @discardableResult
     func addWorkplace(latitude: Double, longitude: Double, radius: Double, placeName: String,
-                      placeType: PlaceType = .work) {
-        guard let workActivity else { return }
-        addPlace(activityId: workActivity.id, latitude: latitude, longitude: longitude, radius: radius,
+                      placeType: PlaceType = .work) -> Bool {
+        guard let workActivity else {
+            lastError = "请先完成地点配置。"
+            return false
+        }
+        return addPlace(activityId: workActivity.id, latitude: latitude, longitude: longitude, radius: radius,
                  placeName: placeName, placeType: placeType)
     }
 
     /// Adds a geofence for any activity.  The existing workplace UI is a
     /// specialised caller of this general use case; it no longer defines the
     /// persistence or runtime boundary of a place.
+    @discardableResult
     func addPlace(activityId: UUID, latitude: Double, longitude: Double, radius: Double, placeName: String,
-                  placeType: PlaceType = .other) {
-        guard activities.contains(where: { $0.id == activityId }) else { return }
+                  placeType: PlaceType = .other) -> Bool {
+        guard activities.contains(where: { $0.id == activityId }) else {
+            lastError = "活动已不存在，请刷新后重试。"
+            return false
+        }
         do {
             let referenceTrigger = triggers.first { $0.activityId == activityId && $0.type == .geofence }
             let trigger = ActivityTrigger(
@@ -309,33 +352,51 @@ final class AppModel: ObservableObject {
             try activityRepository.save(trigger)
             reconcileGeofence(trigger, fallbackMessage: "地点已保存；定位恢复后会自动开启记录。")
             refreshPublishedData()
-        } catch { lastError = TimeTraceLocalization.errorMessage(error, fallback: "添加地点失败，请稍后重试。") }
+            return true
+        } catch {
+            lastError = TimeTraceLocalization.errorMessage(error, fallback: "添加地点失败，请稍后重试。")
+            return false
+        }
     }
 
+    @discardableResult
     func updateWorkplace(triggerId: UUID, latitude: Double, longitude: Double, radius: Double,
-                         placeName: String, placeType: PlaceType = .work) {
-        updatePlace(triggerId: triggerId, latitude: latitude, longitude: longitude, radius: radius,
-                    placeName: placeName, placeType: placeType)
+                         placeName: String, placeType: PlaceType = .work, isEnabled: Bool? = nil) -> Bool {
+        return updatePlace(triggerId: triggerId, latitude: latitude, longitude: longitude, radius: radius,
+                    placeName: placeName, placeType: placeType, isEnabled: isEnabled)
     }
 
+    @discardableResult
     func updatePlace(triggerId: UUID, latitude: Double, longitude: Double, radius: Double,
-                     placeName: String, placeType: PlaceType) {
-        guard let trigger = triggers.first(where: { $0.id == triggerId && $0.type == .geofence }) else { return }
+                     placeName: String, placeType: PlaceType, isEnabled: Bool? = nil) -> Bool {
+        guard let trigger = triggers.first(where: { $0.id == triggerId && $0.type == .geofence }) else {
+            lastError = "地点已不存在，请刷新后重试。"
+            return false
+        }
         do {
             trigger.latitude = latitude
             trigger.longitude = longitude
             trigger.radius = radius
             trigger.placeName = normalizedPlaceName(placeName)
             trigger.placeType = placeType
+            if let isEnabled { trigger.isEnabled = isEnabled }
             trigger.timeZoneIdentifier = TimeZone.current.identifier
             try activityRepository.save(trigger)
             reconcileGeofence(trigger, fallbackMessage: "地点已更新；定位恢复后会自动开启记录。")
             refreshPublishedData()
-        } catch { lastError = TimeTraceLocalization.errorMessage(error, fallback: "更新地点失败，请稍后重试。") }
+            return true
+        } catch {
+            lastError = TimeTraceLocalization.errorMessage(error, fallback: "更新地点失败，请稍后重试。")
+            return false
+        }
     }
 
-    func setPlaceEnabled(triggerId: UUID, isEnabled: Bool) {
-        guard let trigger = triggers.first(where: { $0.id == triggerId && $0.type == .geofence }) else { return }
+    @discardableResult
+    func setPlaceEnabled(triggerId: UUID, isEnabled: Bool) -> Bool {
+        guard let trigger = triggers.first(where: { $0.id == triggerId && $0.type == .geofence }) else {
+            lastError = "地点已不存在，请刷新后重试。"
+            return false
+        }
         do {
             trigger.isEnabled = isEnabled
             try activityRepository.save(trigger)
@@ -345,19 +406,27 @@ final class AppModel: ObservableObject {
                 geofence.remove(triggerId: trigger.id)
             }
             refreshPublishedData()
+            return true
         } catch {
             lastError = TimeTraceLocalization.errorMessage(error, fallback: "更新地点状态失败，请稍后重试。")
+            return false
         }
     }
 
-    func deleteWorkplace(_ trigger: ActivityTrigger) {
-        guard workTriggers.contains(where: { $0.id == trigger.id }) else { return }
+    @discardableResult
+    func deleteWorkplace(_ trigger: ActivityTrigger) -> Bool {
+        guard workTriggers.contains(where: { $0.id == trigger.id }) else {
+            lastError = "地点已不存在，请刷新后重试。"
+            return false
+        }
         do {
             geofence.remove(triggerId: trigger.id)
             try activityRepository.delete(trigger)
             refreshPublishedData()
+            return true
         } catch {
             lastError = TimeTraceLocalization.errorMessage(error, fallback: "删除地点失败，请稍后重试。")
+            return false
         }
     }
 
@@ -738,47 +807,97 @@ final class AppModel: ObservableObject {
         }
     }
 
-    func createReminder(name: String, type: ActivityType, time: Date, weekdaysMask: Int) async {
+    @discardableResult
+    func createReminder(name: String, type: ActivityType, time: Date, weekdaysMask: Int) async -> Bool {
+        let name = name.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !name.isEmpty, weekdaysMask & 127 != 0 else {
+            lastError = "请输入提醒名称，并至少选择一天。"
+            return false
+        }
         do {
             let activity = ActivityDefinition(name: name, type: type)
             try activityRepository.save(activity)
             let parts = Calendar.current.dateComponents([.hour, .minute], from: time)
             let reminder = ReminderDefinition(activityId: activity.id, name: name,
                                               hour: parts.hour ?? 21, minute: parts.minute ?? 0,
-                                              weekdaysMask: weekdaysMask)
-            let trigger = ActivityTrigger(activityId: activity.id, type: .schedule,
-                                          weekdaysMask: weekdaysMask, hour: parts.hour ?? 21,
-                                          minute: parts.minute ?? 0,
-                                          timeZoneIdentifier: TimeZone.current.identifier)
-            try activityRepository.save(trigger)
+                                              weekdaysMask: weekdaysMask & 127)
             try reminderRepository.save(reminder)
-            do {
-                let authorized = try await notifications.requestAuthorization()
-                guard authorized else {
-                    notificationCapabilityStatus = .needsAuthorization
-                    refreshPublishedData()
-                    return
-                }
-                try await notifications.schedule(reminder)
-                notificationCapabilityStatus = .available
-            } catch {
-                notificationCapabilityStatus = .unavailable(message: "提醒已保存；通知恢复后会自动生效。")
-            }
             refreshPublishedData()
-        } catch { lastError = TimeTraceLocalization.errorMessage(error, fallback: "创建提醒失败，请稍后重试。") }
+            await scheduleSavedReminder(reminder)
+            return true
+        } catch {
+            lastError = TimeTraceLocalization.errorMessage(error, fallback: "创建提醒失败，请稍后重试。")
+            return false
+        }
     }
 
-    func deleteReminder(_ reminder: ReminderDefinition) async {
+    @discardableResult
+    func updateReminder(id: UUID, name: String, time: Date, weekdaysMask: Int, isEnabled: Bool) async -> Bool {
+        let name = name.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !name.isEmpty, weekdaysMask & 127 != 0 else {
+            lastError = "请输入提醒名称，并至少选择一天。"
+            return false
+        }
         do {
-            let scheduleTriggers = try activityRepository.fetchTriggers(activityId: reminder.activityId)
-                .filter { $0.type == .schedule }
-            for trigger in scheduleTriggers {
-                try activityRepository.delete(trigger)
+            guard let reminder = try reminderRepository.fetchDefinition(id: id) else {
+                lastError = "提醒已不存在，请返回后重试。"
+                return false
             }
+            let parts = Calendar.current.dateComponents([.hour, .minute], from: time)
+            reminder.name = name
+            reminder.hour = parts.hour ?? 21
+            reminder.minute = parts.minute ?? 0
+            reminder.weekdaysMask = weekdaysMask & 127
+            reminder.isEnabled = isEnabled
+            try reminderRepository.save(reminder)
+            refreshPublishedData()
+            // Clear old delivered and snoozed notifications before rescheduling.
+            await notifications.cancel(reminder)
+            await scheduleSavedReminder(reminder)
+            return true
+        } catch {
+            lastError = TimeTraceLocalization.errorMessage(error, fallback: "修改提醒失败，请稍后重试。")
+            return false
+        }
+    }
+
+    private func scheduleSavedReminder(_ reminder: ReminderDefinition) async {
+        guard reminder.isEnabled else { return }
+        do {
+            guard try await notifications.requestAuthorization() else {
+                notificationCapabilityStatus = .restricted
+                return
+            }
+            // Read the current definitions after permission prompts/other awaits.
+            try await notifications.reconcile(reminderRepository.fetchDefinitions())
+            notificationCapabilityStatus = .available
+        } catch {
+            notificationCapabilityStatus = .unavailable(message: "提醒已保存，但通知安排失败，请稍后重试。")
+        }
+    }
+
+    func refreshNotificationAuthorization() async {
+        notificationCapabilityStatus = await notifications.authorizationStatus()
+    }
+
+    @discardableResult
+    func deleteReminder(_ reminder: ReminderDefinition) async -> Bool {
+        do {
             try reminderRepository.delete(reminder)
+            // Legacy schedule triggers are not used by notification scheduling.
+            // Preserve them while another definition still shares the activity.
+            if try reminderRepository.fetchDefinitions().allSatisfy({ $0.activityId != reminder.activityId }) {
+                let legacy = try activityRepository.fetchTriggers(activityId: reminder.activityId)
+                    .filter { $0.type == .schedule }
+                for trigger in legacy { try activityRepository.delete(trigger) }
+            }
             refreshPublishedData()
             await notifications.cancel(reminder)
-        } catch { lastError = TimeTraceLocalization.errorMessage(error, fallback: "删除提醒失败，请稍后重试。") }
+            return true
+        } catch {
+            lastError = TimeTraceLocalization.errorMessage(error, fallback: "删除提醒失败，请稍后重试。")
+            return false
+        }
     }
 
     /// Notification scheduling is a device-local projection, unlike reminder
@@ -858,15 +977,18 @@ final class AppModel: ObservableObject {
     }
 
     private func refreshPublishedData() {
-        do {
-            try normalizeImmediateDuplicateGeofenceExits()
-            activities = try activityRepository.fetchAll()
-            triggers = try activityRepository.fetchTriggers(activityId: nil)
-            events = try eventRepository.fetchAll()
-            sessions = try sessionRepository.fetch(activityId: nil).filter { $0.deletedAt == nil }
-            reminders = try reminderRepository.fetchDefinitions()
-            reminderInstances = try reminderRepository.fetchInstances()
-        } catch { lastError = TimeTraceLocalization.errorMessage(error, fallback: "刷新本地数据失败，请稍后重试。") }
+        do { try publishRepositoryData() }
+        catch { lastError = TimeTraceLocalization.errorMessage(error, fallback: "刷新本地数据失败，请稍后重试。") }
+    }
+
+    private func publishRepositoryData() throws {
+        try normalizeImmediateDuplicateGeofenceExits()
+        activities = try activityRepository.fetchAll()
+        triggers = try activityRepository.fetchTriggers(activityId: nil)
+        events = try eventRepository.fetchAll()
+        sessions = try sessionRepository.fetch(activityId: nil).filter { $0.deletedAt == nil }
+        reminders = try reminderRepository.fetchDefinitions()
+        reminderInstances = try reminderRepository.fetchInstances()
     }
 
     /// Processing disposition is stored with CloudKit-backed events. A remote
@@ -931,7 +1053,7 @@ final class AppModel: ObservableObject {
         if !activeGeofenceTriggers.isEmpty {
             requestGeofenceNotificationAuthorization()
         }
-        refreshPublishedData()
+        try publishRepositoryData()
     }
 
     /// A newly installed device can finish its first local fetch before
@@ -993,7 +1115,7 @@ final class AppModel: ObservableObject {
                 monitoringBeganInside = monitoringBeganInsideTriggerIDs.remove(id) != nil
             }
             guard let trigger = try activityRepository.fetchTriggers(activityId: nil)
-                .first(where: { $0.id == triggerId && $0.type == .geofence && $0.isEnabled }) else { return }
+                .first(where: { $0.id == triggerId && $0.type == .geofence && $0.isEnabled && !$0.isDemoData }) else { return }
             let activityId = trigger.activityId
             var metadata = timeZoneMetadata()
             metadata.values["placeTriggerId"] = trigger.id.uuidString
@@ -1031,6 +1153,10 @@ final class AppModel: ObservableObject {
     /// Registration is an adapter concern. Persisting a place must not depend
     /// on Core Location being temporarily available on this device.
     private func reconcileGeofence(_ trigger: ActivityTrigger, fallbackMessage: String) {
+        guard trigger.isEnabled, !trigger.isDemoData else {
+            geofence.remove(triggerId: trigger.id)
+            return
+        }
         guard let latitude = trigger.latitude, let longitude = trigger.longitude, let radius = trigger.radius else {
             geofenceCapabilityStatus = .unavailable(message: fallbackMessage)
             return

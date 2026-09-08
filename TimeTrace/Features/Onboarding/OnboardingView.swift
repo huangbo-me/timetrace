@@ -41,7 +41,7 @@ struct OnboardingView: View {
                 .listRowBackground(Color.clear)
 
                 Section {
-                    Text("TimeTrace 会用系统地理围栏记录你真正到达和离开地点的时间，不会持续保存移动轨迹。")
+                    Text("TimeTrace 根据系统检测到的地点进出事件记录时间，可能存在延迟；不会持续保存移动轨迹。")
                         .foregroundStyle(.secondary)
                 } header: { Text("自动记录，真实优先") }
 
@@ -78,13 +78,17 @@ struct OnboardingView: View {
                     )
                 }
 
-                Section("常规安排（不限制自动记录）") {
+                Section {
                     WeekdayPicker(mask: $weekdaysMask)
                     Toggle("设置正常工作时间", isOn: $useNormalHours)
                     if useNormalHours {
                         DatePicker("开始", selection: $normalStart, displayedComponents: .hourAndMinute)
                         DatePicker("结束", selection: $normalEnd, displayedComponents: .hourAndMinute)
                     }
+                } header: {
+                    Text("常规安排")
+                } footer: {
+                    Text("目前仅保存此安排，不用于工作日判断、自动结束或工时扣除；休息日也会记录地点进出。")
                 }
 
                 Section {
@@ -101,7 +105,7 @@ struct OnboardingView: View {
                     }
                     .frame(maxWidth: .infinity)
                 } footer: {
-                    Text("系统会先请求使用期间定位；完成后会继续请求“始终允许”和通知权限，用于后台围栏记录与提醒。")
+                    Text("系统会先请求使用期间定位；完成后会继续请求“始终允许”和通知权限，用于后台围栏记录与进出通知。")
                 }
             }
             .scrollContentBackground(.hidden)
@@ -433,7 +437,7 @@ struct WorkplaceAddressSearch: View {
             }
             message = results.isEmpty
                 ? "没有找到匹配地址，请使用当前位置或在地图上选择。"
-                : "请选择一个\(cityPrefix.isEmpty ? "" : "“\(cityPrefix)”内的")结果"
+                : "请选择搜索结果，并在地图上确认位置"
         } catch {
             message = "搜索失败，请检查网络，或使用当前位置。"
         }

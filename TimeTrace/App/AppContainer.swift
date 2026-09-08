@@ -31,9 +31,9 @@ final class AppContainer: ObservableObject {
     }
 }
 
-/// A deep presentation module: each feature sees a stable store seam while
-/// the transition from the legacy aggregate to focused application use cases
-/// remains internal to the composition root.
+/// Feature stores currently forward observation from the shared AppModel.
+/// Views still read its models and call its use cases; these stores are not
+/// independent presentation modules yet.
 @MainActor
 class FeatureStore: ObservableObject {
     let application: AppModel

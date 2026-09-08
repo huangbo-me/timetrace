@@ -1,3 +1,4 @@
+import CoreLocation
 import SwiftUI
 import UIKit
 
@@ -94,6 +95,41 @@ struct TTSectionTitle: View {
 /// Reusable, non-blocking feedback used when an optional platform capability
 /// is unavailable. It keeps feature content visible instead of replacing it
 /// with an error screen.
+struct TTLocationPermissionNotice: View {
+    @Environment(\.openURL) private var openURL
+    let status: CLAuthorizationStatus
+
+    var body: some View {
+        if status != .authorizedAlways {
+            Button {
+                guard let url = URL(string: UIApplication.openSettingsURLString) else { return }
+                openURL(url)
+            } label: {
+                HStack(spacing: 12) {
+                    Image(systemName: "location.slash.fill")
+                    VStack(alignment: .leading, spacing: 5) {
+                        Text("定位权限不足").font(.subheadline.weight(.semibold))
+                        Text(status == .restricted
+                             ? "定位受到系统限制，请检查屏幕使用时间或设备管理设置。"
+                             : "请在系统设置中将定位权限改为“始终”，以使用后台自动记录。")
+                            .font(.caption)
+                        Text("前往系统设置").font(.subheadline.weight(.semibold))
+                    }
+                    Spacer(minLength: 0)
+                    Image(systemName: "chevron.right").font(.caption.weight(.bold))
+                }
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .padding(12)
+                .background(.orange.opacity(0.10), in: RoundedRectangle(cornerRadius: 12))
+                .contentShape(Rectangle())
+            }
+            .buttonStyle(.plain)
+            .foregroundStyle(.orange)
+            .accessibilityHint("打开时迹的系统设置页面")
+        }
+    }
+}
+
 struct TTCapabilityNotice: View {
     let message: String
     var systemImage: String = "exclamationmark.triangle.fill"

@@ -226,7 +226,7 @@ struct InsightsView: View {
     private var insightPresentation: PlaceInsightPresentation {
         switch trendPlaceFilter {
         case .all:
-            return PlaceInsightPresentation(type: .work)
+            return PlaceInsightPresentation(type: nil)
         case .place(let triggerId):
             let type = triggerId.flatMap { id in
                 model.workTriggers.first { $0.id == id }?.placeType

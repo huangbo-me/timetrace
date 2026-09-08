@@ -19,6 +19,7 @@ protocol NotificationServicing: AnyObject {
     var onAction: ((ReminderNotificationAction) -> Void)? { get set }
     func registerCategories()
     func requestAuthorization() async throws -> Bool
+    func authorizationStatus() async -> PlatformCapabilityStatus
     func schedule(_ reminder: ReminderDefinition) async throws
     func reconcile(_ reminders: [ReminderDefinition]) async throws
     func cancel(_ reminder: ReminderDefinition) async
@@ -99,6 +100,15 @@ final class LocalNotificationService: NSObject, NotificationServicing, UNUserNot
 
     func requestAuthorization() async throws -> Bool {
         try await center.requestAuthorization(options: [.alert, .badge, .sound])
+    }
+
+    func authorizationStatus() async -> PlatformCapabilityStatus {
+        switch await center.notificationSettings().authorizationStatus {
+        case .authorized, .provisional, .ephemeral: .available
+        case .denied: .restricted
+        case .notDetermined: .needsAuthorization
+        @unknown default: .unavailable(message: "无法读取通知权限")
+        }
     }
 
     func schedule(_ reminder: ReminderDefinition) async throws {

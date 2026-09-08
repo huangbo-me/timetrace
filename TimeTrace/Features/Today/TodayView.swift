@@ -19,7 +19,7 @@ enum TodayPlacePresentation {
     static func name(for session: ActivitySession, places: [ActivityTrigger]) -> String {
         guard let placeTriggerId = session.placeTriggerId,
               let place = places.first(where: { $0.id == placeTriggerId }) else {
-            return "工作地点"
+            return session.placeTriggerId == nil ? "手动记录" : "未关联地点"
         }
         return place.displayPlaceName
     }
@@ -53,10 +53,10 @@ enum TodayWorkdayRule {
                           detail: "已记录为\(workdayLabel)加班", statusLabel: "已保留加班记录")
         case .rest:
             TodayHeroCopy(title: "今日休息", detail: "今天是\(workdayLabel)，好好休息吧",
-                          statusLabel: "休息日不自动记录工作时间")
+                          statusLabel: "休息日到达地点仍会自动记录")
         case .regular:
-            TodayHeroCopy(title: isActive ? "正在\(placeName)" : "自动记录已开启",
-                          detail: isActive ? "系统正在为你记录工作时间" : "到达\(placeName)后将自动开始记录",
+            TodayHeroCopy(title: isActive ? "正在\(placeName)" : "地点时间记录",
+                          detail: isActive ? "系统正在为你记录工作时间" : "系统检测到进出已启用地点时记录",
                           statusLabel: "一切自动记录，无需操作")
         }
     }
@@ -99,6 +99,7 @@ struct TodayView: View {
             ScrollView(showsIndicators: false) {
                 VStack(alignment: .leading, spacing: 20) {
                     header
+                    TTLocationPermissionNotice(status: model.locationAuthorizationStatus)
                     hero(summary: todaySummary, now: timeline.date)
                     if let summary = todaySummary {
                         TTSectionTitle(title: "今日时间线")
@@ -188,7 +189,7 @@ struct TodayView: View {
             VStack(alignment: .leading, spacing: 4) {
                 Text(mode == .rest ? "今日安排" : "今日累计工作时长")
                     .font(.caption).foregroundStyle(.white.opacity(0.8))
-                Text(summary.map { _ in TimeTraceFormat.duration(workSummary.duration(now: now)) } ?? (mode == .rest ? "无需记录" : "尚未开始"))
+                Text(summary.map { _ in TimeTraceFormat.duration(workSummary.duration(now: now)) } ?? (mode == .rest ? "尚无记录" : "尚未开始"))
                     .font(.system(size: 29, weight: .bold, design: .rounded))
                     .monospacedDigit()
                 if let arrival = workSummary.firstArrivalTime {
@@ -196,7 +197,7 @@ struct TodayView: View {
                         .font(.caption.weight(.medium)).foregroundStyle(.white.opacity(0.82))
                 }
             }
-            Label(copy.statusLabel, systemImage: "checkmark.circle.fill")
+            Label(model.automaticRecordingDetail, systemImage: "location.fill")
                 .font(.caption.weight(.medium))
                 .foregroundStyle(.white.opacity(0.9))
                 .padding(.horizontal, 11).padding(.vertical, 8)

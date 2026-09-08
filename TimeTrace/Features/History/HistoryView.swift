@@ -53,7 +53,7 @@ struct HistoryView: View {
                                 HistoryStatusRow(session: session, state: .needsCompletion, origin: origins[session.id] ?? .system)
                             }
                             .buttonStyle(.plain)
-                            .accessibilityHint("补齐这段工作记录的结束时间")
+                            .accessibilityHint("补齐这段时间记录的结束时间")
                         }
 
                         ForEach(model.orphanedWorkExitEvents, id: \.id) { event in
@@ -84,7 +84,7 @@ struct HistoryView: View {
                                 HistoryStatusRow(session: session, state: .active, origin: origins[session.id] ?? .system)
                             }
                             .buttonStyle(.plain)
-                            .accessibilityHint("查看这段正在记录的工作时间")
+                            .accessibilityHint("查看这段正在记录的活动时间")
                         }
                     }
                 }
@@ -219,7 +219,7 @@ struct HistoryView: View {
             .contentShape(RoundedRectangle(cornerRadius: 22, style: .continuous))
         }
         .buttonStyle(.plain)
-        .accessibilityHint("打开当天的全部工作时段")
+        .accessibilityHint("打开当天的全部记录时段")
         .onAppear {
             guard summary.id == visibleSummaries.last?.id,
                   visibleSummaries.count < allSummaries.count else { return }
@@ -468,7 +468,7 @@ private struct HistoryDayCard: View {
                     .foregroundStyle(tint)
                     .minimumScaleFactor(0.8)
 
-                Text("\(summary.sessionCount) 个工作时段 · \(durationTier.label)")
+                Text("\(summary.sessionCount) 个记录时段 · \(durationTier.label)")
                     .font(.caption)
                     .foregroundStyle(.secondary)
             }
@@ -524,7 +524,7 @@ private struct HistoryDayDetailView: View {
             List {
                 Section {
                     LabeledContent("总时长", value: TimeTraceFormat.duration(summary.totalDuration))
-                    LabeledContent("工作时段", value: "\(summary.sessionCount) 段")
+                    LabeledContent("记录时段", value: "\(summary.sessionCount) 段")
                     LabeledContent("到达", value: summary.firstArrivalTime.map {
                         TimeTraceFormat.time.string(from: $0)
                     } ?? "—")
@@ -553,7 +553,7 @@ private struct HistoryDayDetailView: View {
                             .contentShape(Rectangle())
                         }
                         .buttonStyle(.plain)
-                        .accessibilityHint("查看并修正这个工作时段")
+                        .accessibilityHint("查看并修正这个记录时段")
                     }
                 }
             }
@@ -801,7 +801,7 @@ struct RepairOrphanedExitView: View {
                 }
                 Section("手动补录") {
                     DatePicker("到达日期和时间", selection: $startAt, in: ...event.timestamp)
-                    Text("凌晨离开时可选择上一天的实际到达时间；保存后会生成一段跨日工作记录。")
+                    Text("凌晨离开时可选择上一天的实际到达时间；保存后会生成一段跨日时间记录。")
                         .font(.footnote)
                         .foregroundStyle(.secondary)
                 }
@@ -837,7 +837,7 @@ struct AddSessionView: View {
                 DatePicker("开始", selection: $startAt)
                 DatePicker("结束", selection: $endAt)
             }
-            .navigationTitle("补录工作时段")
+            .navigationTitle("补录时间记录")
             .toolbar {
                 ToolbarItem(placement: .cancellationAction) { Button("取消") { dismiss() } }
                 ToolbarItem(placement: .confirmationAction) {

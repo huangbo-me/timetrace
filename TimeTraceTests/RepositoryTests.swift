@@ -6,10 +6,231 @@ import UserNotifications
 
 @MainActor
 final class RepositoryTests: XCTestCase {
+    func testBackupImportRebuildsSessionsAndRefreshesFeatureStoresAndServices() async throws {
+        let sourceGeofence = FakeGeofenceService()
+        let source = AppModel(inMemory: true, geofence: sourceGeofence, notifications: FakeNotificationService())
+        source.load()
+        source.finishOnboarding(latitude: 31.2, longitude: 121.4, radius: 150,
+                                weekdaysMask: 62, normalStartMinute: nil, normalEndMinute: nil)
+        let placeID = try XCTUnwrap(source.workTrigger?.id)
+        let start = Date().addingTimeInterval(-7200)
+        sourceGeofence.emit(.entered(triggerId: placeID, timestamp: start))
+        sourceGeofence.emit(.exited(triggerId: placeID, timestamp: start.addingTimeInterval(3600)))
+        await source.createReminder(name: "已有提醒", type: .exercise, time: Date(), weekdaysMask: 127)
+        let reminderID = try XCTUnwrap(source.reminders.first?.id)
+        var snapshot = try source.backupSnapshot()
+        snapshot.sessions = [] // The import must replay events rather than rely on copied projections.
+
+        let geofence = FakeGeofenceService()
+        let notifications = FakeNotificationService()
+        let target = AppModel(inMemory: true, geofence: geofence, notifications: notifications)
+        let container = AppContainer(application: target)
+        container.root.loadIfNeeded()
+        let result = try target.importBackup(snapshot)
+        XCTAssertNil(result.refreshWarning)
+        XCTAssertEqual(result.insertedCount, snapshot.count)
+        XCTAssertTrue(container.root.state.isOnboarded)
+        XCTAssertEqual(container.places.state.placeCount, 1)
+        XCTAssertEqual(container.settings.state.reminderCount, 1)
+        XCTAssertEqual(target.sessions.count, 1)
+        XCTAssertEqual(target.sessions.first?.duration, 3600)
+        XCTAssertTrue(geofence.restoredTriggerIds.contains(placeID))
+        let interval = DateInterval(start: start.addingTimeInterval(-1), end: start.addingTimeInterval(7200))
+        XCTAssertEqual(container.history.application.dailySummaries(interval: interval).first?.totalDuration, 3600)
+        for _ in 0..<100 where !notifications.scheduledDefinitionIds.contains(reminderID) { await Task.yield() }
+        XCTAssertTrue(notifications.scheduledDefinitionIds.contains(reminderID))
+        XCTAssertEqual(try target.importBackup(snapshot).insertedCount, 0)
+        XCTAssertEqual(target.sessions.count, 1)
+    }
+
+    func testPlaceEditorUseCaseSavesStateAndCoordinatesTogetherAndReportsMissingPlace() throws {
+        let geofence = FakeGeofenceService()
+        let model = AppModel(inMemory: true, geofence: geofence, notifications: FakeNotificationService())
+        model.load()
+        model.finishOnboarding(latitude: 31.2, longitude: 121.4, radius: 200,
+                               weekdaysMask: 62, normalStartMinute: nil, normalEndMinute: nil)
+        let place = try XCTUnwrap(model.workTrigger)
+        let registrations = geofence.registeredTriggerIds.count
+        XCTAssertTrue(model.updateWorkplace(triggerId: place.id, latitude: 31.3, longitude: 121.5,
+                                            radius: 150, placeName: "图书馆", placeType: .study, isEnabled: false))
+        XCTAssertEqual(place.latitude, 31.3)
+        XCTAssertEqual(place.placeType, .study)
+        XCTAssertFalse(place.isEnabled)
+        XCTAssertEqual(geofence.registeredTriggerIds.count, registrations)
+        geofence.emit(.entered(triggerId: place.id, timestamp: Date()))
+        XCTAssertTrue(model.events.isEmpty)
+        XCTAssertTrue(model.updateWorkplace(triggerId: place.id, latitude: 31.3, longitude: 121.5,
+                                            radius: 150, placeName: "图书馆", placeType: .study, isEnabled: true))
+        XCTAssertEqual(geofence.registeredTriggerIds.count, registrations + 1)
+        XCTAssertTrue(model.deleteWorkplace(place))
+        XCTAssertFalse(model.updateWorkplace(triggerId: place.id, latitude: 31.3, longitude: 121.5,
+                                             radius: 150, placeName: "图书馆"))
+        XCTAssertNotNil(model.lastError)
+    }
+
+    func testReminderCreateEditDisableDeletePreservesCompletedActivityData() async throws {
+        let notifications = FakeNotificationService()
+        let model = AppModel(inMemory: true, geofence: FakeGeofenceService(), notifications: notifications)
+        model.load()
+        let created = await model.createReminder(name: " 阅读 ", type: .study, time: Date(), weekdaysMask: 127)
+        XCTAssertTrue(created)
+        let reminder = try XCTUnwrap(model.reminders.first)
+        let id = reminder.id
+        let activityID = reminder.activityId
+        notifications.emit(.start(definitionId: id, requestId: "first-occurrence"))
+        let session = try XCTUnwrap(model.sessions.first)
+        let instance = try XCTUnwrap(model.activeReminderInstances.first)
+        let time = try XCTUnwrap(Calendar.current.date(from: DateComponents(hour: 7, minute: 35)))
+        let edited = await model.updateReminder(id: id, name: "晨读", time: time, weekdaysMask: 62, isEnabled: true)
+        XCTAssertTrue(edited)
+        XCTAssertEqual(model.reminders.count, 1)
+        XCTAssertEqual(reminder.id, id)
+        XCTAssertEqual(reminder.activityId, activityID)
+        XCTAssertEqual(reminder.name, "晨读")
+        XCTAssertEqual(reminder.hour, 7)
+        XCTAssertEqual(reminder.minute, 35)
+        XCTAssertEqual(reminder.weekdaysMask, 62)
+        XCTAssertTrue(notifications.cancelledDefinitionIds.contains(id))
+        let disabled = await model.updateReminder(id: id, name: "晨读", time: time, weekdaysMask: 62, isEnabled: false)
+        XCTAssertTrue(disabled)
+        notifications.emit(.start(definitionId: id, requestId: "disabled-occurrence"))
+        XCTAssertEqual(model.sessions.count, 1)
+        let deleted = await model.deleteReminder(reminder)
+        XCTAssertTrue(deleted)
+        XCTAssertTrue(model.reminders.isEmpty)
+        XCTAssertEqual(model.sessions.first?.id, session.id)
+        model.finishReminderInstance(instance, abandoned: false)
+        XCTAssertEqual(instance.status, .completed)
+        XCTAssertNotNil(model.sessions.first?.endAt)
+    }
+
+    func testReminderValidationAndDeniedPermissionKeepSavedDefinition() async throws {
+        let notifications = FakeNotificationService()
+        notifications.allowsNotifications = false
+        let model = AppModel(inMemory: true, geofence: FakeGeofenceService(), notifications: notifications)
+        model.load()
+        let invalid = await model.createReminder(name: " ", type: .custom, time: Date(), weekdaysMask: 0)
+        XCTAssertFalse(invalid)
+        XCTAssertTrue(model.reminders.isEmpty)
+        let saved = await model.createReminder(name: "喝水", type: .custom, time: Date(), weekdaysMask: 127)
+        XCTAssertTrue(saved)
+        XCTAssertEqual(model.reminders.count, 1)
+        XCTAssertEqual(model.notificationCapabilityStatus, .restricted)
+        XCTAssertTrue(notifications.scheduledDefinitionIds.isEmpty)
+        let reminder = try XCTUnwrap(model.reminders.first)
+        let invalidEdit = await model.updateReminder(id: reminder.id, name: " ", time: Date(), weekdaysMask: 127, isEnabled: true)
+        XCTAssertFalse(invalidEdit)
+        XCTAssertEqual(reminder.name, "喝水")
+    }
+
+    func testEditedReminderReplacesOldTimeWeekdaysAndSnoozedRequests() async throws {
+        let requests = FakeNotificationRequestStore()
+        let service = LocalNotificationService(requests: requests)
+        let reminder = ReminderDefinition(activityId: UUID(), name: "阅读", hour: 21, minute: 0, weekdaysMask: 127)
+        try await service.schedule(reminder)
+        try await service.snooze(definitionId: reminder.id, name: reminder.name)
+        requests.deliveredRequests = Array(requests.pendingRequests.values)
+        reminder.name = "晨读"
+        reminder.hour = 7
+        reminder.minute = 35
+        reminder.weekdaysMask = 2
+        await service.cancel(reminder)
+        try await service.reconcile([reminder])
+        XCTAssertEqual(requests.pendingRequests.count, 1)
+        XCTAssertTrue(requests.deliveredRequests.isEmpty)
+        let request = try XCTUnwrap(requests.pendingRequests.values.first)
+        let trigger = try XCTUnwrap(request.trigger as? UNCalendarNotificationTrigger)
+        XCTAssertEqual(trigger.dateComponents.weekday, 2)
+        XCTAssertEqual(trigger.dateComponents.hour, 7)
+        XCTAssertEqual(trigger.dateComponents.minute, 35)
+        XCTAssertTrue(request.content.title.contains("晨读"))
+    }
+
+    func testEncryptedBackupRoundTripAndIdempotentMerge() throws {
+        let source = try PersistenceController(inMemory: true)
+        let activity = ActivityDefinition(name: "备份活动", type: .custom)
+        let trigger = ActivityTrigger(activityId: activity.id, type: .geofence,
+                                      latitude: 31.2, longitude: 121.4, radius: 200, placeName: "办公室")
+        let event = ActivityEvent(activityId: activity.id, eventType: .manualStart,
+                                  timestamp: Date(), source: .user)
+        event.disposition = .applied
+        let session = ActivitySession(activityId: activity.id, placeTriggerId: trigger.id,
+                                      startAt: event.timestamp, startEventId: event.id)
+        let evidence = ActivityEvidence(activityId: activity.id, sessionId: session.id,
+                                        type: .system, source: .system, timestamp: Date())
+        let reminder = ReminderDefinition(activityId: activity.id, name: "提醒", hour: 21, minute: 0, weekdaysMask: 127)
+        let instance = ReminderInstance(reminderDefinitionId: reminder.id, activityId: activity.id, scheduledAt: Date())
+        instance.sessionId = session.id
+        source.context.insert(activity)
+        source.context.insert(trigger)
+        source.context.insert(event)
+        source.context.insert(session)
+        source.context.insert(evidence)
+        source.context.insert(reminder)
+        source.context.insert(instance)
+        try source.context.save()
+        let snapshot = try DataBackupService(container: source.container).snapshot()
+        XCTAssertEqual(snapshot.count, 7)
+        let encrypted = try BackupArchive.encrypt(snapshot, password: "测试password123")
+        XCTAssertFalse(String(decoding: encrypted, as: UTF8.self).contains("备份活动"))
+        XCTAssertThrowsError(try BackupArchive.decrypt(encrypted, password: "wrong"))
+        let decoded = try BackupArchive.decrypt(encrypted, password: "测试password123")
+        let target = try PersistenceController(inMemory: true)
+        let service = DataBackupService(container: target.container)
+        XCTAssertEqual(try service.merge(decoded), 7)
+        XCTAssertEqual(try service.merge(decoded), 0)
+        let restored = try service.snapshot()
+        XCTAssertEqual(restored.sessions.first?.placeTriggerId, trigger.id)
+        XCTAssertEqual(restored.sessions.first?.startEventId, event.id)
+        XCTAssertEqual(restored.events.first?.dispositionRaw, event.dispositionRaw)
+        XCTAssertEqual(restored.instances.first?.sessionId, session.id)
+        XCTAssertEqual(restored.triggers.first?.latitude, trigger.latitude)
+        XCTAssertEqual(restored.evidence.first?.sessionId, session.id)
+        var oldBackup = decoded
+        oldBackup.activities[0].name = "旧名称"
+        XCTAssertEqual(try service.merge(oldBackup), 0)
+        XCTAssertEqual(try service.snapshot().activities.first?.name, "备份活动")
+    }
+
+    func testBackupRejectsMalformedAndUnsupportedFilesWithoutChangingStore() throws {
+        XCTAssertThrowsError(try BackupArchive.decrypt(Data("bad".utf8), password: "password"))
+        let persistence = try PersistenceController(inMemory: true)
+        let service = DataBackupService(container: persistence.container)
+        var snapshot = BackupSnapshot()
+        snapshot.version = 999
+        snapshot.activities = [ActivityDefinitionRecord(ActivityDefinition(name: "无效", type: .custom))]
+        XCTAssertThrowsError(try service.merge(snapshot))
+        XCTAssertEqual(try service.snapshot().count, 0)
+    }
+
     func testVisibleTimeFormattingUsesSimplifiedChinese() {
         XCTAssertEqual(TimeTraceFormat.duration(8 * 3_600 + 5 * 60), "8小时 5分钟")
         XCTAssertEqual(TimeTraceLocalization.locale.language.languageCode?.identifier, "zh")
         XCTAssertEqual(TimeTraceLocalization.locale.language.script?.identifier, "Hans")
+    }
+
+    func testAutomaticRecordingGuidanceTracksPlacesAndAuthorization() {
+        let geofence = FakeGeofenceService()
+        let model = AppModel(inMemory: true, geofence: geofence)
+        model.load()
+        XCTAssertTrue(model.automaticRecordingDetail.contains("添加或启用"))
+        model.finishOnboarding(latitude: 31.2, longitude: 121.4, radius: 100,
+                               weekdaysMask: 62, normalStartMinute: nil, normalEndMinute: nil,
+                               placeName: "办公室")
+        XCTAssertTrue(model.automaticRecordingDetail.contains("休息日也会记录"))
+        geofence.setAuthorizationStatus(.denied)
+        XCTAssertTrue(model.automaticRecordingDetail.contains("权限不可用"))
+        geofence.setAuthorizationStatus(.authorizedWhenInUse)
+        XCTAssertTrue(model.automaticRecordingDetail.contains("始终"))
+        if let place = model.workTrigger {
+            model.setPlaceEnabled(triggerId: place.id, isEnabled: false)
+            let registrationCount = geofence.registeredTriggerIds.count
+            model.updateWorkplace(triggerId: place.id, latitude: 31.3, longitude: 121.5,
+                                  radius: 150, placeName: "新办公室", placeType: .work)
+            XCTAssertEqual(geofence.registeredTriggerIds.count, registrationCount)
+            XCTAssertFalse(place.isEnabled)
+        }
+        XCTAssertTrue(model.automaticRecordingDetail.contains("添加或启用"))
     }
 
     func testWeekendNonWorkPlaceUsesActivityPresentationRatherThanOvertime() {
@@ -668,6 +889,7 @@ private final class FakeGeofenceService: GeofenceServicing {
     var onAuthorizationChange: ((CLAuthorizationStatus) -> Void)?
     var onRegionState: ((UUID, CLRegionState) -> Void)?
     private(set) var registeredTriggerIds: [UUID] = []
+    private(set) var restoredTriggerIds: [UUID] = []
     private(set) var removedTriggerIds: [UUID] = []
     var shouldFailRegistration = false
 
@@ -682,7 +904,9 @@ private final class FakeGeofenceService: GeofenceServicing {
         return radius
     }
     func remove(triggerId: UUID) { removedTriggerIds.append(triggerId) }
-    func restoreAndRequestState(triggerId: UUID, latitude: Double, longitude: Double, radius: Double) {}
+    func restoreAndRequestState(triggerId: UUID, latitude: Double, longitude: Double, radius: Double) {
+        restoredTriggerIds.append(triggerId)
+    }
     func emit(_ event: GeofenceSystemEvent) { onEvent?(event) }
     func emitState(triggerId: UUID, state: CLRegionState) { onRegionState?(triggerId, state) }
     func setAuthorizationStatus(_ status: CLAuthorizationStatus) {
@@ -696,12 +920,15 @@ private final class FakeNotificationService: NotificationServicing {
     var onAction: ((ReminderNotificationAction) -> Void)?
     private(set) var scheduledDefinitionIds: [UUID] = []
     private(set) var snoozedDefinitionIds: [UUID] = []
+    private(set) var cancelledDefinitionIds: [UUID] = []
     private(set) var geofenceTransitions: [(transition: GeofenceNotificationTransition, activityName: String, placeName: String)] = []
 
     func registerCategories() {}
-    func requestAuthorization() async throws -> Bool { true }
+    var allowsNotifications = true
+    func requestAuthorization() async throws -> Bool { allowsNotifications }
+    func authorizationStatus() async -> PlatformCapabilityStatus { allowsNotifications ? .available : .restricted }
     func schedule(_ reminder: ReminderDefinition) async throws { scheduledDefinitionIds.append(reminder.id) }
-    func cancel(_ reminder: ReminderDefinition) async {}
+    func cancel(_ reminder: ReminderDefinition) async { cancelledDefinitionIds.append(reminder.id) }
     func reconcile(_ reminders: [ReminderDefinition]) async throws {
         for reminder in reminders where reminder.isEnabled { try await schedule(reminder) }
     }

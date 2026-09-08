@@ -36,6 +36,7 @@ struct PlacesView: View {
                 }
                 .padding(.top, 4)
 
+                TTLocationPermissionNotice(status: model.locationAuthorizationStatus)
                 placesMap
                 HStack(spacing: 10) {
                     Button {
@@ -63,7 +64,7 @@ struct PlacesView: View {
                         VStack(spacing: 12) {
                             TTIcon(systemName: "mappin.slash", tint: .orange, size: 50)
                             Text("还没有设置地点").font(.headline)
-                            Text("添加地点后，TimeTrace 会在你到达和离开时自动记录工作时间。")
+                            Text("添加地点后，TimeTrace 会在你到达和离开时记录地点停留时间。")
                                 .font(.subheadline).foregroundStyle(TimeTraceDesign.muted).multilineTextAlignment(.center)
                             Button("添加地点") {
                                 editorTarget = .add
@@ -86,7 +87,7 @@ struct PlacesView: View {
                                         HStack {
                                             Text(trigger.displayPlaceName).font(.headline)
                                             Spacer()
-                                            Text("启用中").font(.caption.weight(.semibold)).foregroundStyle(TimeTraceDesign.blue)
+                                            Text(trigger.isDemoData ? "演示地点" : (trigger.isEnabled ? "已启用" : "已停用")).font(.caption.weight(.semibold)).foregroundStyle(TimeTraceDesign.blue)
                                                 .padding(.horizontal, 8).padding(.vertical, 4)
                                                 .background(TimeTraceDesign.blue.opacity(0.1), in: Capsule())
                                     }
@@ -96,7 +97,7 @@ struct PlacesView: View {
                                         .padding(.horizontal, 8)
                                         .padding(.vertical, 4)
                                         .background(TimeTraceDesign.violet.opacity(0.1), in: Capsule())
-                                    Text("到达和离开时自动记录工作时间")
+                                    Text("到达和离开时记录地点停留时间")
                                         .font(.caption).foregroundStyle(TimeTraceDesign.muted)
                                     Label("围栏半径 \(Int(trigger.radius ?? 200)) 米", systemImage: "scope")
                                         .font(.caption).foregroundStyle(TimeTraceDesign.muted)
