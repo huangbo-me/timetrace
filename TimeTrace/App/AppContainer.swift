@@ -53,6 +53,7 @@ final class RootStore: FeatureStore {
         RootState(
             isLoaded: application.isLoaded,
             isRestoringICloudData: application.isRestoringICloudData,
+            needsInitialCloudRestoreDecision: application.needsInitialCloudRestoreDecision,
             isOnboarded: application.isOnboarded,
             errorMessage: application.lastError
         )
@@ -69,12 +70,19 @@ final class RootStore: FeatureStore {
         Task { [application] in await application.reconcileReminders() }
     }
 
+    func retryInitialCloudRestore() { application.retryInitialCloudRestore() }
+
+    func startNewRecordAfterSkippingCloudRestore() {
+        application.startNewRecordAfterSkippingCloudRestore()
+    }
+
     func dismissError() { application.lastError = nil }
 }
 
 struct RootState: Equatable {
     let isLoaded: Bool
     let isRestoringICloudData: Bool
+    let needsInitialCloudRestoreDecision: Bool
     let isOnboarded: Bool
     let errorMessage: String?
 }

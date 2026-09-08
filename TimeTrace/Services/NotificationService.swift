@@ -20,11 +20,39 @@ protocol NotificationServicing: AnyObject {
     func registerCategories()
     func requestAuthorization() async throws -> Bool
     func schedule(_ reminder: ReminderDefinition) async throws
-    func cancel(_ reminder: ReminderDefinition)
+    func reconcile(_ reminders: [ReminderDefinition]) async throws
+    func cancel(_ reminder: ReminderDefinition) async
     func snooze(definitionId: UUID, name: String) async throws
     func notifyGeofenceTransition(_ transition: GeofenceNotificationTransition,
                                   activityName: String,
                                   placeName: String) async throws
+}
+
+/// The notification adapter owns the request diff. Tests replace only the
+/// system request store, so they exercise real scheduling and cancellation.
+@MainActor
+protocol NotificationRequestStore {
+    func pending() async -> [UNNotificationRequest]
+    func delivered() async -> [UNNotificationRequest]
+    func add(_ request: UNNotificationRequest) async throws
+    func removePending(_ identifiers: [String])
+    func removeDelivered(_ identifiers: [String])
+}
+
+@MainActor
+private struct SystemNotificationRequestStore: NotificationRequestStore {
+    let center: UNUserNotificationCenter
+    func pending() async -> [UNNotificationRequest] { await center.pendingNotificationRequests() }
+    func delivered() async -> [UNNotificationRequest] { await center.deliveredNotifications().map(\.request) }
+    func add(_ request: UNNotificationRequest) async throws { try await center.add(request) }
+    func removePending(_ identifiers: [String]) { center.removePendingNotificationRequests(withIdentifiers: identifiers) }
+    func removeDelivered(_ identifiers: [String]) { center.removeDeliveredNotifications(withIdentifiers: identifiers) }
+}
+
+enum ReminderOccurrence {
+    static func identifier(requestID: String, deliveredAt: Date) -> String {
+        "\(requestID).occurrence.\(deliveredAt.timeIntervalSince1970)"
+    }
 }
 
 @MainActor
@@ -34,12 +62,26 @@ final class LocalNotificationService: NSObject, NotificationServicing, UNUserNot
     static let snoozeIdentifier = "SNOOZE_ACTIVITY"
     static let skipIdentifier = "SKIP_ACTIVITY"
 
-    private let center = UNUserNotificationCenter.current()
+    private let center: UNUserNotificationCenter
+    private let requests: NotificationRequestStore
+    private var operation: Task<Void, Error>?
     var onAction: ((ReminderNotificationAction) -> Void)?
 
-    override init() {
+    init(center: UNUserNotificationCenter = .current(), requests: NotificationRequestStore? = nil) {
+        self.center = center
+        self.requests = requests ?? SystemNotificationRequestStore(center: center)
         super.init()
         center.delegate = self
+    }
+
+    private func serialize(_ work: @escaping @MainActor () async throws -> Void) async throws {
+        let previous = operation
+        let task = Task { @MainActor in
+            _ = try? await previous?.value
+            try await work()
+        }
+        operation = task
+        try await task.value
     }
 
     func registerCategories() {
@@ -60,35 +102,67 @@ final class LocalNotificationService: NSObject, NotificationServicing, UNUserNot
     }
 
     func schedule(_ reminder: ReminderDefinition) async throws {
-        cancel(reminder)
+        try await serialize { [self] in try await scheduleRequests(reminder) }
+    }
+
+    private func scheduleRequests(_ reminder: ReminderDefinition) async throws {
+        let obsolete = (1...7).filter { !reminder.isEnabled || !reminder.weekdaysMask.containsWeekday($0) }
+            .map { requestIdentifier(reminder.id, weekday: $0) }
+        requests.removePending(obsolete)
+        guard reminder.isEnabled else { return }
         for weekday in 1...7 where reminder.weekdaysMask.containsWeekday(weekday) {
-            let content = content(definitionId: reminder.id, name: reminder.name)
             var components = DateComponents()
             components.calendar = Calendar(identifier: .gregorian)
             components.weekday = weekday
             components.hour = reminder.hour
             components.minute = reminder.minute
             let trigger = UNCalendarNotificationTrigger(dateMatching: components, repeats: true)
-            let request = UNNotificationRequest(
+            try await requests.add(UNNotificationRequest(
                 identifier: requestIdentifier(reminder.id, weekday: weekday),
-                content: content,
-                trigger: trigger
-            )
-            try await center.add(request)
+                content: content(definitionId: reminder.id, name: reminder.name), trigger: trigger
+            ))
         }
     }
 
-    func cancel(_ reminder: ReminderDefinition) {
-        center.removePendingNotificationRequests(withIdentifiers: (1...7).map { requestIdentifier(reminder.id, weekday: $0) })
+    func reconcile(_ reminders: [ReminderDefinition]) async throws {
+        try await serialize { [self] in
+            let enabled = reminders.filter(\.isEnabled)
+            let validIDs = Set(enabled.map(\.id))
+            let pending = await requests.pending()
+            let delivered = await requests.delivered()
+            func isObsolete(_ request: UNNotificationRequest) -> Bool {
+                guard let id = definitionID(in: request) else { return false }
+                return !validIDs.contains(id)
+            }
+            requests.removePending(pending.filter(isObsolete).map(\.identifier))
+            requests.removeDelivered(delivered.filter(isObsolete).map(\.identifier))
+            for reminder in enabled { try await scheduleRequests(reminder) }
+        }
+    }
+
+    func cancel(_ reminder: ReminderDefinition) async {
+        try? await serialize { [self] in
+            let pending = await requests.pending()
+            let delivered = await requests.delivered()
+            requests.removePending(pending.filter { definitionID(in: $0) == reminder.id }.map(\.identifier))
+            requests.removeDelivered(delivered.filter { definitionID(in: $0) == reminder.id }.map(\.identifier))
+        }
+    }
+
+    nonisolated private func definitionID(in request: UNNotificationRequest) -> UUID? {
+        guard let raw = request.content.userInfo["definitionId"] as? String else { return nil }
+        return UUID(uuidString: raw)
     }
 
     func snooze(definitionId: UUID, name: String) async throws {
-        let request = UNNotificationRequest(
-            identifier: "timetrace.snooze.\(definitionId.uuidString).\(UUID().uuidString)",
-            content: content(definitionId: definitionId, name: name),
-            trigger: UNTimeIntervalNotificationTrigger(timeInterval: 10 * 60, repeats: false)
-        )
-        try await center.add(request)
+        try await serialize { [self] in
+            let request = UNNotificationRequest(
+                identifier: "timetrace.snooze.\(definitionId.uuidString).\(UUID().uuidString)",
+                content: content(definitionId: definitionId, name: name),
+                trigger: UNTimeIntervalNotificationTrigger(timeInterval: 10 * 60, repeats: false)
+            )
+            try await requests.add(request)
+        }
     }
 
     func notifyGeofenceTransition(_ transition: GeofenceNotificationTransition,
@@ -137,7 +211,8 @@ final class LocalNotificationService: NSObject, NotificationServicing, UNUserNot
                                       notification: UNNotification) async {
         guard let raw = notification.request.content.userInfo["definitionId"] as? String,
               let id = UUID(uuidString: raw) else { return }
-        let requestId = notification.request.identifier
+        let requestId = ReminderOccurrence.identifier(requestID: notification.request.identifier,
+                                                       deliveredAt: notification.date)
         let action: ReminderNotificationAction
         switch kind {
         case .delivered: action = .delivered(definitionId: id, requestId: requestId)

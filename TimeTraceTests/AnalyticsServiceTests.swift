@@ -134,6 +134,62 @@ final class AnalyticsServiceTests: XCTestCase {
         XCTAssertEqual(unmarkedSummary.totalWorkDuration, 4 * 3600)
     }
 
+    func testTodayWorkDurationExcludesEveryNonWorkPlace() {
+        let places = PlaceType.allCases.map {
+            ActivityTrigger(activityId: activityId, type: .geofence, placeType: $0)
+        }
+        let values = places.map { place in
+            ActivitySession(activityId: activityId, placeTriggerId: place.id,
+                            startAt: date(day: 1, hour: 0),
+                            endAt: date(day: 1, hour: 0).addingTimeInterval(place.placeType == .work ? 720 : 36360),
+                            status: .completed)
+        }
+        let summary = TodayWorkSummary(sessions: values, places: places, workActivityId: activityId)
+        XCTAssertEqual(summary.duration(now: date(day: 1, hour: 12)), 720)
+        XCTAssertEqual(summary.sessions.count, 1)
+    }
+
+    func testTodayHomeTenHoursSixMinutesAndOfficeTwelveMinutes() {
+        let home = ActivityTrigger(activityId: activityId, type: .geofence, placeType: .home)
+        let office = ActivityTrigger(activityId: activityId, type: .geofence, placeType: .work)
+        let start = date(day: 1, hour: 0)
+        let arrival = start.addingTimeInterval(606 * 60)
+        let now = arrival.addingTimeInterval(12 * 60)
+        let homeSession = ActivitySession(activityId: activityId, placeTriggerId: home.id,
+                                          startAt: start, endAt: arrival, status: .completed)
+        let officeSession = ActivitySession(activityId: activityId, placeTriggerId: office.id,
+                                            startAt: arrival, endAt: now, status: .completed)
+        for active in [false, true] {
+            officeSession.endAt = active ? nil : now
+            officeSession.status = active ? .active : .completed
+            let daily = service.dailySummaries(sessions: [homeSession, officeSession], activityId: activityId,
+                                                interval: interval(day: 1, length: 1), calendar: calendar)[0]
+            let summary = TodayWorkSummary(sessions: daily.sessions, places: [home, office], workActivityId: activityId)
+            XCTAssertEqual(summary.duration(now: now), 720)
+            XCTAssertEqual(summary.firstArrivalTime, arrival)
+            XCTAssertEqual(daily.sessions.count, 2, "时间线仍保留居家和公司记录")
+        }
+        homeSession.endAt = nil
+        homeSession.status = .active
+        XCTAssertEqual(TodayWorkSummary(sessions: [homeSession], places: [home], workActivityId: activityId)
+            .duration(now: now), 0)
+    }
+
+    func testTodayManualWorkAndMissingPlaceClassification() {
+        let manualWork = session(day: 1, start: 9, end: 10)
+        let study = ActivitySession(activityId: UUID(), startAt: date(day: 1, hour: 9),
+                                    endAt: date(day: 1, hour: 12), status: .completed)
+        let missingPlace = ActivitySession(activityId: activityId, placeTriggerId: UUID(),
+                                           startAt: date(day: 1, hour: 9), endAt: date(day: 1, hour: 12), status: .completed)
+        let incomplete = ActivitySession(activityId: activityId, startAt: date(day: 1, hour: 10), status: .incomplete)
+        let deleted = session(day: 1, start: 10, end: 11)
+        deleted.deletedAt = date(day: 1, hour: 12)
+        let values = [manualWork, study, missingPlace, incomplete, deleted]
+        let summary = TodayWorkSummary(sessions: values, places: [], workActivityId: activityId)
+        XCTAssertEqual(summary.duration(now: date(day: 1, hour: 12)), 3600)
+        XCTAssertTrue(TodayWorkSummary(sessions: values, places: [], workActivityId: nil).sessions.isEmpty)
+    }
+
     private func session(day: Int, start: Int, end: Int) -> ActivitySession {
         ActivitySession(activityId: activityId, startAt: date(day: day, hour: start),
                         endAt: date(day: day, hour: end), status: .completed)

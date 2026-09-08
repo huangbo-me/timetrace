@@ -38,6 +38,7 @@ enum ICloudSyncStatus: Equatable {
 final class AppModel: ObservableObject {
     @Published private(set) var isLoaded = false
     @Published private(set) var isRestoringICloudData = false
+    @Published private(set) var needsInitialCloudRestoreDecision = false
     @Published private(set) var activities: [ActivityDefinition] = []
     @Published private(set) var triggers: [ActivityTrigger] = []
     @Published private(set) var events: [ActivityEvent] = []
@@ -60,6 +61,11 @@ final class AppModel: ObservableObject {
     private let reminderRepository: ReminderRepository
     private let pipeline: EventPipeline
     private var isCloudKitEnabled = false
+    private let initialCloudRestoreDelays: [TimeInterval]
+    private let cloudStatusProvider: () async -> ICloudSyncStatus
+    private var isCheckingCloudStatus = false
+    private var isAwaitingInitialCloudStatus = false
+    private var hasStartedLoading = false
     /// Places added while the person is already inside have no knowable
     /// arrival time. Their first subsequent exit is informational, not an
     /// anomaly that should ask the person to fabricate an arrival.
@@ -78,7 +84,7 @@ final class AppModel: ObservableObject {
     var workTrigger: ActivityTrigger? {
         workTriggers.first
     }
-    var isOnboarded: Bool { workActivity != nil && workTrigger != nil }
+    var isOnboarded: Bool { workActivity != nil }
     var activeReminderInstances: [ReminderInstance] { reminderInstances.filter { $0.status == .inProgress } }
     var orphanedWorkExitEvents: [ActivityEvent] {
         guard let activityId = workActivity?.id else { return [] }
@@ -98,14 +104,31 @@ final class AppModel: ObservableObject {
 
     init(inMemory: Bool = false,
          geofence: GeofenceServicing? = nil,
-         notifications: NotificationServicing? = nil) {
+         notifications: NotificationServicing? = nil,
+         cloudKitEnabledOverride: Bool? = nil,
+         initialCloudRestoreDelays: [TimeInterval] = [1, 3, 6],
+         cloudStatusProvider: (() async -> ICloudSyncStatus)? = nil) {
+        self.cloudStatusProvider = cloudStatusProvider ?? {
+            do {
+                let status = try await CKContainer(identifier: PersistenceController.cloudKitContainerIdentifier).accountStatus()
+                switch status {
+                case .available: return .enabled
+                case .noAccount: return .signedOut
+                case .restricted: return .restricted
+                default: return .unavailable
+                }
+            } catch {
+                return .unavailable
+            }
+        }
+        self.initialCloudRestoreDelays = initialCloudRestoreDelays
         let geofence = geofence ?? CoreLocationGeofenceService()
         self.geofence = geofence
         self.locationAuthorizationStatus = geofence.authorizationStatus
         self.geofenceCapabilityStatus = .geofence(for: geofence.authorizationStatus)
         do {
             let persistence = try PersistenceController(inMemory: inMemory)
-            isCloudKitEnabled = persistence.isCloudKitEnabled
+            isCloudKitEnabled = cloudKitEnabledOverride ?? persistence.isCloudKitEnabled
             let activities = SwiftDataActivityRepository(context: persistence.context)
             let events = SwiftDataActivityEventRepository(context: persistence.context)
             let sessions = SwiftDataActivitySessionRepository(context: persistence.context)
@@ -144,11 +167,14 @@ final class AppModel: ObservableObject {
     }
 
     func load() {
+        guard !hasStartedLoading else { return }
+        hasStartedLoading = true
         refreshICloudSyncStatus()
         do {
             try refreshDataAndRestoreGeofence()
             if isCloudKitEnabled && !isOnboarded {
-                restoreInitialCloudDataBeforeOnboarding()
+                isAwaitingInitialCloudStatus = true
+                resolveInitialCloudStatusIfNeeded()
             } else {
                 finishLoading()
             }
@@ -165,9 +191,28 @@ final class AppModel: ObservableObject {
         guard isLoaded else { return }
         do {
             try refreshDataAndRestoreGeofence()
+            if isOnboarded { needsInitialCloudRestoreDecision = false }
+            Task { [weak self] in await self?.reconcileReminders() }
         } catch {
             lastError = TimeTraceLocalization.errorMessage(error, fallback: "刷新 iCloud 数据失败，请稍后重试。")
         }
+    }
+
+    /// A fresh local store is ambiguous while CloudKit is still merging. Never
+    /// create a new account's data by treating an empty first fetch as proof
+    /// that no older data exists; let the person choose to wait or start over.
+    func retryInitialCloudRestore() {
+        guard isCloudKitEnabled, iCloudSyncStatus == .enabled, !isOnboarded else { return }
+        needsInitialCloudRestoreDecision = false
+        isLoaded = false
+        restoreInitialCloudDataBeforeOnboarding()
+    }
+
+    /// This is an explicit user choice. It only stops waiting for an older
+    /// cloud store and never deletes CloudKit records.
+    func startNewRecordAfterSkippingCloudRestore() {
+        needsInitialCloudRestoreDecision = false
+        finishLoading()
     }
 
     /// CloudKit has no single "all records are synced" callback. This checks
@@ -176,40 +221,34 @@ final class AppModel: ObservableObject {
     func refreshICloudSyncStatus() {
         guard isCloudKitEnabled else {
             iCloudSyncStatus = .notEnabled
+            resolveInitialCloudStatusIfNeeded()
             return
         }
-
+        guard !isCheckingCloudStatus else { return }
+        isCheckingCloudStatus = true
         iCloudSyncStatus = .checking
-        let container = CKContainer(identifier: PersistenceController.cloudKitContainerIdentifier)
-        container.accountStatus { [weak self] accountStatus, error in
-            Task { @MainActor [weak self] in
-                guard let self else { return }
-                guard error == nil else {
-                    self.iCloudSyncStatus = .unavailable
-                    return
-                }
-                switch accountStatus {
-                case .available:
-                    self.iCloudSyncStatus = .enabled
-                    self.refreshSyncedData()
-                case .noAccount:
-                    self.iCloudSyncStatus = .signedOut
-                case .restricted:
-                    self.iCloudSyncStatus = .restricted
-                case .couldNotDetermine, .temporarilyUnavailable:
-                    self.iCloudSyncStatus = .unavailable
-                @unknown default:
-                    self.iCloudSyncStatus = .unavailable
-                }
-            }
+        Task { @MainActor [weak self] in
+            guard let self else { return }
+            self.iCloudSyncStatus = await self.cloudStatusProvider()
+            self.isCheckingCloudStatus = false
+            self.resolveInitialCloudStatusIfNeeded()
+            if self.iCloudSyncStatus == .enabled { self.refreshSyncedData() }
         }
+    }
+
+    private func resolveInitialCloudStatusIfNeeded() {
+        guard isAwaitingInitialCloudStatus, iCloudSyncStatus != .checking else { return }
+        isAwaitingInitialCloudStatus = false
+        // Account availability only offers restoration; waiting starts on a tap.
+        needsInitialCloudRestoreDecision = iCloudSyncStatus == .enabled && !isOnboarded
+        finishLoading()
     }
 
     func finishOnboarding(latitude: Double, longitude: Double, radius: Double,
                           weekdaysMask: Int, normalStartMinute: Int?, normalEndMinute: Int?,
                           placeName: String = "工作地点") {
         do {
-            let work = ActivityDefinition(name: "工作", type: .work)
+            let work = workActivity ?? ActivityDefinition(name: "工作", type: .work)
             try activityRepository.save(work)
             let trigger = ActivityTrigger(
                 activityId: work.id,
@@ -607,22 +646,27 @@ final class AppModel: ObservableObject {
     }
     #endif
 
-    func adjustSession(_ session: ActivitySession, startAt: Date, endAt: Date?) {
-        guard endAt == nil || endAt! >= startAt else { return }
+    @discardableResult
+    func adjustSession(_ session: ActivitySession, startAt: Date, endAt: Date?) -> Bool {
+        guard endAt == nil || endAt! >= startAt else { return false }
         do {
             let values = [
                 "sessionId": session.id.uuidString,
-                "oldStart": session.startAt.ISO8601Format(),
-                "newStart": startAt.ISO8601Format(),
-                "oldEnd": session.endAt?.ISO8601Format() ?? "",
-                "newEnd": endAt?.ISO8601Format() ?? "",
+                "oldStart": session.startAt.ISO8601Format(.init(includingFractionalSeconds: true)),
+                "newStart": startAt.ISO8601Format(.init(includingFractionalSeconds: true)),
+                "oldEnd": session.endAt?.ISO8601Format(.init(includingFractionalSeconds: true)) ?? "",
+                "newEnd": endAt?.ISO8601Format(.init(includingFractionalSeconds: true)) ?? "",
                 "startEventId": session.startEventId?.uuidString ?? ""
             ]
             _ = try pipeline.ingest(ActivityEvent(activityId: session.activityId, eventType: .sessionAdjusted,
                                                   timestamp: Date(), source: .user,
                                                   metadata: EventMetadata(values: values)))
             refreshPublishedData()
-        } catch { lastError = TimeTraceLocalization.errorMessage(error, fallback: "修改工作记录失败，请稍后重试。") }
+            return true
+        } catch {
+            lastError = TimeTraceLocalization.errorMessage(error, fallback: "修改工作记录失败，请稍后重试。")
+            return false
+        }
     }
 
     func repairOrphanedExit(_ event: ActivityEvent, startAt: Date) {
@@ -677,7 +721,8 @@ final class AppModel: ObservableObject {
         } catch { lastError = TimeTraceLocalization.errorMessage(error, fallback: "忽略异常记录失败，请稍后重试。") }
     }
 
-    func deleteSession(_ session: ActivitySession) {
+    @discardableResult
+    func deleteSession(_ session: ActivitySession) -> Bool {
         do {
             _ = try pipeline.ingest(ActivityEvent(activityId: session.activityId, eventType: .sessionDeleted,
                                                   timestamp: Date(), source: .user,
@@ -686,7 +731,11 @@ final class AppModel: ObservableObject {
                                                     "startEventId": session.startEventId?.uuidString ?? ""
                                                   ])))
             refreshPublishedData()
-        } catch { lastError = TimeTraceLocalization.errorMessage(error, fallback: "删除工作记录失败，请稍后重试。") }
+            return true
+        } catch {
+            lastError = TimeTraceLocalization.errorMessage(error, fallback: "删除工作记录失败，请稍后重试。")
+            return false
+        }
     }
 
     func createReminder(name: String, type: ActivityType, time: Date, weekdaysMask: Int) async {
@@ -719,9 +768,8 @@ final class AppModel: ObservableObject {
         } catch { lastError = TimeTraceLocalization.errorMessage(error, fallback: "创建提醒失败，请稍后重试。") }
     }
 
-    func deleteReminder(_ reminder: ReminderDefinition) {
+    func deleteReminder(_ reminder: ReminderDefinition) async {
         do {
-            notifications.cancel(reminder)
             let scheduleTriggers = try activityRepository.fetchTriggers(activityId: reminder.activityId)
                 .filter { $0.type == .schedule }
             for trigger in scheduleTriggers {
@@ -729,6 +777,7 @@ final class AppModel: ObservableObject {
             }
             try reminderRepository.delete(reminder)
             refreshPublishedData()
+            await notifications.cancel(reminder)
         } catch { lastError = TimeTraceLocalization.errorMessage(error, fallback: "删除提醒失败，请稍后重试。") }
     }
 
@@ -738,12 +787,8 @@ final class AppModel: ObservableObject {
     /// device, or one that previously failed to schedule, becomes actionable
     /// without changing the visible Settings design.
     func reconcileReminders() async {
-        let enabledReminders = reminders.filter(\.isEnabled)
-        guard !enabledReminders.isEmpty else { return }
         do {
-            for reminder in enabledReminders {
-                try await notifications.schedule(reminder)
-            }
+            try await notifications.reconcile(reminderRepository.fetchDefinitions())
         } catch {
             notificationCapabilityStatus = .unavailable(message: "提醒已保存；通知恢复后会自动生效。")
         }
@@ -751,8 +796,7 @@ final class AppModel: ObservableObject {
 
     func finishReminderInstance(_ instance: ReminderInstance, abandoned: Bool) {
         do {
-            if let sessionId = instance.sessionId,
-               let session = sessions.first(where: { $0.id == sessionId && $0.endAt == nil }) {
+            if let session = session(for: instance), session.endAt == nil {
                 _ = try pipeline.ingest(ActivityEvent(activityId: session.activityId, eventType: .manualStop,
                                                       timestamp: Date(), source: .user,
                                                       metadata: EventMetadata(values: ["reminderInstanceId": instance.id.uuidString])))
@@ -805,7 +849,12 @@ final class AppModel: ObservableObject {
     }
 
     func session(for instance: ReminderInstance) -> ActivitySession? {
-        sessions.first { $0.id == instance.sessionId }
+        if let direct = sessions.first(where: { $0.id == instance.sessionId }) { return direct }
+        // A late cloud projection may have replaced a duplicate session ID.
+        let start = events.first {
+            $0.eventType.startsSession && $0.metadata.values["reminderInstanceId"] == instance.id.uuidString
+        }
+        return start.flatMap { event in sessions.first { $0.startEventId == event.id } }
     }
 
     private func refreshPublishedData() {
@@ -864,9 +913,9 @@ final class AppModel: ObservableObject {
         // Sessions and registrations are device-local projections. Rebuild
         // them for every activity after a CloudKit merge, rather than only
         // for the default work activity shown by today's UI.
-        for (activityId, timeZoneIdentifier) in timeZoneByActivity {
-            try pipeline.refreshStaleSessions(activityId: activityId,
-                                              timeZoneIdentifier: timeZoneIdentifier)
+        for activity in activities {
+            try pipeline.refreshStaleSessions(activityId: activity.id,
+                                              timeZoneIdentifier: timeZoneByActivity[activity.id] ?? TimeZone.current.identifier)
         }
         for trigger in triggers where trigger.type == .geofence && !trigger.isDemoData {
             guard trigger.isEnabled,
@@ -899,23 +948,26 @@ final class AppModel: ObservableObject {
         }
     }
 
-    /// SwiftData's CloudKit mirror is asynchronous. On a freshly installed
-    /// app, the first fetch is commonly empty even though a private database
-    /// already exists. Do not show onboarding until we have given that mirror
-    /// a few chances to merge the previous device's data.
+    /// After the person chooses restoration, give the asynchronous CloudKit
+    /// mirror a few chances to merge the previous device's data.
     private func restoreInitialCloudDataBeforeOnboarding() {
         guard !isRestoringICloudData else { return }
         isRestoringICloudData = true
         Task { @MainActor [weak self] in
             guard let self else { return }
-            for delay in [1, 3, 6] {
-                try? await Task.sleep(for: .seconds(delay))
+            for delay in self.initialCloudRestoreDelays {
+                if delay > 0 { try? await Task.sleep(for: .seconds(delay)) }
                 guard !Task.isCancelled else { return }
                 try? self.refreshDataAndRestoreGeofence()
                 if self.isOnboarded { break }
             }
             self.isRestoringICloudData = false
-            self.finishLoading()
+            if self.isOnboarded {
+                self.finishLoading()
+            } else {
+                self.needsInitialCloudRestoreDecision = true
+                self.isLoaded = true
+            }
         }
     }
 
@@ -1025,10 +1077,13 @@ final class AppModel: ObservableObject {
                  .snooze(let id, let request), .skip(let id, let request), .dismissed(let id, let request):
                 definitionId = id; requestId = request
             }
-            guard let definition = try reminderRepository.fetchDefinition(id: definitionId) else { return }
-            let instance = try reminderRepository.fetchInstances().first {
-                $0.notificationRequestId == requestId && ![.completed, .abandoned, .skipped].contains($0.status)
-            } ?? ReminderInstance(reminderDefinitionId: definition.id, activityId: definition.activityId,
+            guard let definition = try reminderRepository.fetchDefinition(id: definitionId), definition.isEnabled else { return }
+            let existing = try reminderRepository.fetchInstances().first { $0.notificationRequestId == requestId }
+            if let existing {
+                guard ![.completed, .abandoned, .skipped].contains(existing.status) else { return }
+                if existing.status == .inProgress { return }
+            }
+            let instance = existing ?? ReminderInstance(reminderDefinitionId: definition.id, activityId: definition.activityId,
                                   scheduledAt: Date(), notificationRequestId: requestId)
 
             let eventType: ActivityEventType
@@ -1042,7 +1097,11 @@ final class AppModel: ObservableObject {
             case .snooze:
                 instance.status = .snoozed
                 eventType = .reminderSnoozed
-                Task { try? await notifications.snooze(definitionId: definition.id, name: definition.name) }
+                Task { [weak self] in
+                    guard let self,
+                          let saved = try? self.reminderRepository.fetchDefinition(id: definition.id), saved.isEnabled else { return }
+                    try? await self.notifications.snooze(definitionId: saved.id, name: saved.name)
+                }
             case .skip:
                 instance.status = .skipped
                 eventType = .reminderSkipped

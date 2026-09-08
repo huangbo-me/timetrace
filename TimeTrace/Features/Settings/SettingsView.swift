@@ -8,7 +8,6 @@ struct SettingsView: View {
     @Environment(\.openURL) private var openURL
     @AppStorage("profileNickname") private var profileNickname = ""
     @State private var showingPlaces = false
-    @State private var showingReminder = false
     @State private var showingICloudHelp = false
 
     private var model: AppModel { store.application }
@@ -85,6 +84,51 @@ struct SettingsView: View {
                     .accessibilityHint("轻点重新检查 iCloud 同步状态")
                 }
 
+                TTCard {
+                    VStack(alignment: .leading, spacing: 14) {
+                        HStack {
+                            Text("同步范围")
+                                .font(.subheadline.weight(.semibold))
+                            Spacer()
+                            Text(iCloudScopeStatus)
+                                .font(.caption.weight(.medium))
+                                .foregroundStyle(iCloudScopeTint)
+                        }
+                        Text(iCloudScopeExplanation)
+                            .font(.caption)
+                            .foregroundStyle(TimeTraceDesign.muted)
+
+                        Divider()
+                        iCloudScopeRow(
+                            title: "活动与地点",
+                            detail: "\(model.activities.count) 个活动 · \(model.triggers.filter { $0.type == .geofence }.count) 个地点\n名称、围栏位置、半径和自动记录设置",
+                            systemImage: "mappin.and.ellipse",
+                            syncs: true
+                        )
+                        Divider()
+                        iCloudScopeRow(
+                            title: "时间记录",
+                            detail: "\(model.sessions.count) 段会话 · \(model.events.count) 条事件\n到达、离开、手动补齐和汇总依据",
+                            systemImage: "clock.arrow.circlepath",
+                            syncs: true
+                        )
+                        Divider()
+                        iCloudScopeRow(
+                            title: "本机围栏注册",
+                            detail: "不会直接同步；地点恢复到本机后会重新注册",
+                            systemImage: "iphone",
+                            syncs: false
+                        )
+                        Divider()
+                        iCloudScopeRow(
+                            title: "连续位置轨迹",
+                            detail: "不会收集，也不会上传到 iCloud",
+                            systemImage: "location.slash",
+                            syncs: false
+                        )
+                    }
+                }
+
                 TTSectionTitle(title: "自动记录")
                 TTCard {
                     VStack(spacing: 14) {
@@ -112,30 +156,6 @@ struct SettingsView: View {
                     }
                 }
 
-                TTSectionTitle(title: "活动提醒", action: "添加", onAction: { showingReminder = true })
-                TTCard {
-                    if case .unavailable(let message) = model.notificationCapabilityStatus {
-                        TTCapabilityNotice(message: message, systemImage: "bell.slash.fill")
-                        Divider()
-                    }
-                    if model.reminders.isEmpty {
-                        HStack { TTIcon(systemName: "bell.badge", tint: .orange); Text("尚未添加提醒").font(.subheadline).foregroundStyle(TimeTraceDesign.muted); Spacer() }
-                    } else {
-                        VStack(spacing: 12) {
-                            ForEach(model.reminders, id: \.id) { reminder in
-                                HStack {
-                                    TTIcon(systemName: "bell.fill", tint: .orange, size: 34)
-                                    VStack(alignment: .leading) {
-                                        Text(reminder.name).font(.subheadline.weight(.medium))
-                                        Text(String(format: "%02d:%02d", reminder.hour, reminder.minute)).font(.caption).foregroundStyle(TimeTraceDesign.muted)
-                                    }
-                                    Spacer()
-                                    Button(role: .destructive) { model.deleteReminder(reminder) } label: { Image(systemName: "trash") }
-                                }
-                            }
-                        }
-                    }
-                }
 #if DEBUG
                 TTSectionTitle(title: "开发者工具")
                 TTCard {
@@ -186,7 +206,6 @@ struct SettingsView: View {
         .timeTraceScreen()
         .timeTraceTabTitle("设置")
         .sheet(isPresented: $showingPlaces) { PlacesView() }
-        .sheet(isPresented: $showingReminder) { ReminderEditorView() }
         .alert("开启 iCloud 同步", isPresented: $showingICloudHelp) {
             Button("知道了", role: .cancel) {}
         } message: {
@@ -263,6 +282,56 @@ struct SettingsView: View {
         case .restricted: "受限制"
         case .notDetermined: "未请求"
         @unknown default: "未知"
+        }
+    }
+
+    private var iCloudScopeStatus: String {
+        switch model.iCloudSyncStatus {
+        case .enabled: "已纳入 iCloud"
+        case .checking: "正在确认"
+        case .unavailable: "等待 iCloud"
+        case .notEnabled, .signedOut, .restricted: "仅本机"
+        }
+    }
+
+    private var iCloudScopeTint: Color {
+        switch model.iCloudSyncStatus {
+        case .enabled: .green
+        case .checking, .unavailable: TimeTraceDesign.blue
+        case .notEnabled, .signedOut, .restricted: TimeTraceDesign.muted
+        }
+    }
+
+    private var iCloudScopeExplanation: String {
+        switch model.iCloudSyncStatus {
+        case .enabled:
+            return "已纳入 iCloud 表示此类数据会同步；实际上传和下载时间取决于网络及系统状态。"
+        case .checking:
+            return "正在确认这台设备能否使用 iCloud；确认完成前不会把数据误标为已同步。"
+        case .unavailable:
+            return "iCloud 暂时不可用；数据会先留在本机，恢复可用后系统会再次尝试同步。"
+        case .notEnabled:
+            return "当前使用本机存储。请确认已登录 iCloud，并重新启动应用以重新检查同步配置。"
+        case .signedOut, .restricted:
+            return "iCloud 当前不可用时，下面所有数据只保留在本机；恢复可用后会再次参与同步。"
+        }
+    }
+
+    private func iCloudScopeRow(title: String, detail: String, systemImage: String, syncs: Bool) -> some View {
+        HStack(alignment: .top, spacing: 12) {
+            TTIcon(systemName: systemImage, tint: syncs ? TimeTraceDesign.blue : TimeTraceDesign.muted, size: 34)
+            VStack(alignment: .leading, spacing: 3) {
+                Text(title).font(.subheadline.weight(.medium))
+                Text(detail)
+                    .font(.caption)
+                    .foregroundStyle(TimeTraceDesign.muted)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+            Spacer(minLength: 8)
+            Text(syncs ? iCloudScopeStatus : "不同步")
+                .font(.caption.weight(.medium))
+                .foregroundStyle(syncs ? iCloudScopeTint : TimeTraceDesign.muted)
+                .multilineTextAlignment(.trailing)
         }
     }
 
@@ -463,42 +532,6 @@ struct WorkplaceEditorView: View {
                 error,
                 fallback: "暂时无法获取当前位置，请稍后重试。"
             )
-        }
-    }
-}
-
-struct ReminderEditorView: View {
-    @EnvironmentObject private var store: SettingsFeatureStore
-    @Environment(\.dismiss) private var dismiss
-    @State private var name = ""
-    @State private var type = ActivityType.custom
-    @State private var time = Calendar.current.date(from: DateComponents(hour: 21)) ?? Date()
-    @State private var weekdaysMask = 0b1111111
-
-    private var model: AppModel { store.application }
-
-    var body: some View {
-        NavigationStack {
-            Form {
-                TextField("例如：阅读、运动或会议", text: $name)
-                Picker("类型", selection: $type) {
-                    ForEach(ActivityType.allCases) { Text($0.displayName).tag($0) }
-                }
-                DatePicker("提醒时间", selection: $time, displayedComponents: .hourAndMinute)
-                WeekdayPicker(mask: $weekdaysMask)
-            }
-            .navigationTitle("添加提醒")
-            .toolbar {
-                ToolbarItem(placement: .cancellationAction) { Button("取消") { dismiss() } }
-                ToolbarItem(placement: .confirmationAction) {
-                    Button("保存") {
-                        Task {
-                            await model.createReminder(name: name, type: type, time: time, weekdaysMask: weekdaysMask)
-                            dismiss()
-                        }
-                    }.disabled(name.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || weekdaysMask == 0)
-                }
-            }
         }
     }
 }

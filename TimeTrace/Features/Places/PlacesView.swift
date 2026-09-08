@@ -114,7 +114,7 @@ struct PlacesView: View {
                 }
 
                 Label {
-                    Text("只在地点边界记录，不会保存你的连续移动轨迹，所有数据均保留在本机。")
+                    Text("只在地点边界记录，不保存连续移动轨迹；数据保存在本机，启用 iCloud 时会同步至你的私有数据库。")
                 } icon: {
                     Image(systemName: "lock.fill")
                 }

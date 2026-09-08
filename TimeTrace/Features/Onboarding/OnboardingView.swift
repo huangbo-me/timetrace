@@ -396,16 +396,15 @@ struct WorkplaceAddressSearch: View {
     @MainActor
     private func search() async {
         let trimmedQuery = query.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !trimmedQuery.isEmpty else { return }
-
-        isSearching = true
-        results = []
-        message = nil
-
+        guard !trimmedQuery.isEmpty, !isSearching, !isDeterminingCity else { return }
         guard let searchCenter = searchOrigin else {
             message = "请先等待当前城市定位完成，或手动切换城市。"
             return
         }
+        isSearching = true
+        defer { isSearching = false }
+        results = []
+        message = nil
         let mapCenter = ChinaMapCoordinateConverter.mapCoordinate(fromSystemCoordinate: searchCenter)
         let region = MKCoordinateRegion(
             center: mapCenter,
@@ -420,7 +419,6 @@ struct WorkplaceAddressSearch: View {
         do {
             guard let request else {
                 message = "无法创建地址搜索，请稍后重试。"
-                isSearching = false
                 return
             }
             let mapItems = try await request.mapItems
@@ -440,7 +438,6 @@ struct WorkplaceAddressSearch: View {
             message = "搜索失败，请检查网络，或使用当前位置。"
         }
 
-        isSearching = false
     }
 
     private func select(_ result: WorkplaceSearchResult) {

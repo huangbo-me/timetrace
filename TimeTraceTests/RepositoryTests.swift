@@ -1,6 +1,7 @@
 import CoreLocation
 import SwiftData
 import XCTest
+import UserNotifications
 @testable import TimeTrace
 
 @MainActor
@@ -115,6 +116,69 @@ final class RepositoryTests: XCTestCase {
         guard case .unavailable = model.geofenceCapabilityStatus else {
             return XCTFail("围栏故障应作为可恢复的能力状态公开")
         }
+    }
+
+    func testFreshCloudInstallOffersRestoreChoiceInsteadOfEnteringOnboarding() async {
+        let model = AppModel(
+            inMemory: true,
+            geofence: FakeGeofenceService(),
+            notifications: FakeNotificationService(),
+            cloudKitEnabledOverride: true,
+            initialCloudRestoreDelays: [0],
+            cloudStatusProvider: { .enabled }
+        )
+
+        model.load()
+        XCTAssertFalse(model.isRestoringICloudData)
+        for _ in 0..<20 where !model.isLoaded { await Task.yield() }
+
+        XCTAssertTrue(model.isLoaded)
+        XCTAssertFalse(model.isOnboarded)
+        XCTAssertTrue(model.needsInitialCloudRestoreDecision)
+    }
+
+    func testUnavailableCloudStartsNewRecordWithoutRestoring() async {
+        for status: ICloudSyncStatus in [.signedOut, .notEnabled, .restricted, .unavailable] {
+            let model = AppModel(inMemory: true, geofence: FakeGeofenceService(),
+                                 notifications: FakeNotificationService(), cloudKitEnabledOverride: true,
+                                 cloudStatusProvider: { status })
+            model.load()
+            for _ in 0..<20 where !model.isLoaded { await Task.yield() }
+            XCTAssertTrue(model.isLoaded)
+            XCTAssertFalse(model.needsInitialCloudRestoreDecision)
+            XCTAssertFalse(model.isRestoringICloudData)
+            XCTAssertFalse(model.isOnboarded)
+        }
+    }
+
+    func testLocalInstallStartsNewRecordImmediately() {
+        let model = AppModel(inMemory: true, geofence: FakeGeofenceService(),
+                             notifications: FakeNotificationService(), cloudKitEnabledOverride: false)
+        model.load()
+        XCTAssertTrue(model.isLoaded)
+        XCTAssertFalse(model.needsInitialCloudRestoreDecision)
+        XCTAssertFalse(model.isRestoringICloudData)
+    }
+
+    func testCloudRestoreOnlyStartsAfterUserChoice() async {
+        let model = AppModel(inMemory: true, geofence: FakeGeofenceService(),
+                             notifications: FakeNotificationService(), cloudKitEnabledOverride: true,
+                             initialCloudRestoreDelays: [0], cloudStatusProvider: { .enabled })
+        model.load()
+        for _ in 0..<20 where !model.isLoaded { await Task.yield() }
+        XCTAssertTrue(model.needsInitialCloudRestoreDecision)
+        XCTAssertFalse(model.isRestoringICloudData)
+        model.retryInitialCloudRestore()
+        XCTAssertTrue(model.isRestoringICloudData)
+        XCTAssertFalse(model.isLoaded)
+        for _ in 0..<20 where !model.isLoaded { await Task.yield() }
+        XCTAssertTrue(model.needsInitialCloudRestoreDecision)
+        model.startNewRecordAfterSkippingCloudRestore()
+        XCTAssertTrue(model.isLoaded)
+        XCTAssertFalse(model.needsInitialCloudRestoreDecision)
+        model.refreshICloudSyncStatus()
+        await Task.yield()
+        XCTAssertFalse(model.needsInitialCloudRestoreDecision)
     }
 
     func testMainlandChinaMapCoordinateRoundTripKeepsSystemGeofenceCoordinate() {
@@ -495,6 +559,87 @@ final class RepositoryTests: XCTestCase {
         XCTAssertEqual(notifications.scheduledDefinitionIds.filter { $0 == reminder.id }.count, 2)
     }
 
+    func testDeletingLastPlaceKeepsHistoryAccessibleAndReusesWorkActivity() throws {
+        let model = AppModel(inMemory: true, geofence: FakeGeofenceService(), notifications: FakeNotificationService())
+        model.load()
+        model.finishOnboarding(latitude: 31.2, longitude: 121.4, radius: 200,
+                               weekdaysMask: 62, normalStartMinute: nil, normalEndMinute: nil)
+        let workID = try XCTUnwrap(model.workActivity?.id)
+        model.deleteWorkplace(try XCTUnwrap(model.workTrigger))
+        XCTAssertTrue(model.isOnboarded)
+        model.finishOnboarding(latitude: 31.3, longitude: 121.5, radius: 200,
+                               weekdaysMask: 62, normalStartMinute: nil, normalEndMinute: nil)
+        XCTAssertEqual(model.workActivity?.id, workID)
+        XCTAssertEqual(model.activities.filter { $0.type == .work }.count, 1)
+        XCTAssertEqual(model.workTrigger?.activityId, workID)
+    }
+
+    func testPipelineRemovesLateDuplicateCloudSessionFromStorage() throws {
+        let persistence = try PersistenceController(inMemory: true)
+        let events = SwiftDataActivityEventRepository(context: persistence.context)
+        let sessions = SwiftDataActivitySessionRepository(context: persistence.context)
+        let pipeline = EventPipeline(events: events, sessions: sessions)
+        let start = ActivityEvent(activityId: UUID(), eventType: .geofenceEnter,
+                                  timestamp: Date().addingTimeInterval(-3600), source: .coreLocation)
+        let first = try XCTUnwrap(pipeline.ingest(start))
+        let lateCloudSession = ActivitySession(activityId: start.activityId, startAt: start.timestamp,
+                                               startEventId: start.id)
+        try sessions.save(lateCloudSession)
+        try pipeline.refreshStaleSessions(activityId: start.activityId, timeZoneIdentifier: "UTC")
+        XCTAssertEqual(try sessions.fetch(activityId: start.activityId).count, 1)
+        XCTAssertEqual(try sessions.fetch(activityId: start.activityId).first?.id, first.id)
+    }
+
+    func testNotificationReconcileCancelsDeletedDefinitionsIncludingSnoozes() async throws {
+        let requests = FakeNotificationRequestStore()
+        let service = LocalNotificationService(requests: requests)
+        let removed = ReminderDefinition(activityId: UUID(), name: "删除", hour: 9, minute: 0, weekdaysMask: 127)
+        let kept = ReminderDefinition(activityId: UUID(), name: "保留", hour: 10, minute: 0, weekdaysMask: 127)
+        try await service.schedule(removed)
+        try await service.snooze(definitionId: removed.id, name: removed.name)
+        try await service.schedule(kept)
+        try await service.snooze(definitionId: kept.id, name: kept.name)
+        requests.deliveredRequests = Array(requests.pendingRequests.values)
+        try await service.reconcile([kept])
+        XCTAssertEqual(requests.pendingRequests.count, 8)
+        XCTAssertTrue(requests.pendingRequests.values.allSatisfy { ($0.content.userInfo["definitionId"] as? String) == kept.id.uuidString })
+        XCTAssertTrue(requests.deliveredRequests.allSatisfy { ($0.content.userInfo["definitionId"] as? String) == kept.id.uuidString })
+        try await service.reconcile([])
+        XCTAssertTrue(requests.pendingRequests.isEmpty)
+        XCTAssertTrue(requests.deliveredRequests.isEmpty)
+    }
+
+    func testDeletingReminderCancelsAlreadyScheduledSnooze() async throws {
+        let requests = FakeNotificationRequestStore()
+        let service = LocalNotificationService(requests: requests)
+        let reminder = ReminderDefinition(activityId: UUID(), name: "阅读", hour: 9, minute: 0, weekdaysMask: 127)
+        try await service.schedule(reminder)
+        try await service.snooze(definitionId: reminder.id, name: reminder.name)
+        XCTAssertEqual(requests.pendingRequests.count, 8)
+        await service.cancel(reminder)
+        XCTAssertTrue(requests.pendingRequests.isEmpty)
+    }
+
+    func testWeeklyDeliveriesKeepIndependentInstancesAndIgnoreRepeatedStart() async throws {
+        let notifications = FakeNotificationService()
+        let model = AppModel(inMemory: true, geofence: FakeGeofenceService(), notifications: notifications)
+        model.load()
+        await model.createReminder(name: "阅读", type: .study, time: Date(), weekdaysMask: 127)
+        let reminder = try XCTUnwrap(model.reminders.first)
+        let firstID = ReminderOccurrence.identifier(requestID: "weekly", deliveredAt: Date(timeIntervalSince1970: 1000))
+        let nextID = ReminderOccurrence.identifier(requestID: "weekly", deliveredAt: Date(timeIntervalSince1970: 1000 + 7 * 86400))
+        notifications.emit(.start(definitionId: reminder.id, requestId: firstID))
+        let first = try XCTUnwrap(model.activeReminderInstances.first)
+        let firstSessionID = first.sessionId
+        notifications.emit(.start(definitionId: reminder.id, requestId: firstID))
+        notifications.emit(.delivered(definitionId: reminder.id, requestId: nextID))
+        XCTAssertEqual(model.reminderInstances.count, 2)
+        XCTAssertEqual(first.status, .inProgress)
+        XCTAssertEqual(first.sessionId, firstSessionID)
+        XCTAssertEqual(model.sessions.count, 1)
+        XCTAssertEqual(model.activeReminderInstances.count, 1)
+    }
+
     func testManualCorrectionAndSoftDeletion() throws {
         let model = AppModel(inMemory: true, geofence: FakeGeofenceService(),
                              notifications: FakeNotificationService())
@@ -507,7 +652,7 @@ final class RepositoryTests: XCTestCase {
         let correctedEnd = start.addingTimeInterval(5400)
         model.adjustSession(session, startAt: start, endAt: correctedEnd)
         XCTAssertEqual(session.status, .manuallyAdjusted)
-        XCTAssertEqual(session.duration, 5400)
+        XCTAssertEqual(session.duration, 5400, "error=\(model.lastError ?? "none"); adjustments=\(model.events.filter { $0.eventType == .sessionAdjusted }.map { $0.metadata.values })")
         model.deleteSession(session)
         XCTAssertTrue(model.sessions.isEmpty)
         XCTAssertNotNil(session.deletedAt)
@@ -556,7 +701,10 @@ private final class FakeNotificationService: NotificationServicing {
     func registerCategories() {}
     func requestAuthorization() async throws -> Bool { true }
     func schedule(_ reminder: ReminderDefinition) async throws { scheduledDefinitionIds.append(reminder.id) }
-    func cancel(_ reminder: ReminderDefinition) {}
+    func cancel(_ reminder: ReminderDefinition) async {}
+    func reconcile(_ reminders: [ReminderDefinition]) async throws {
+        for reminder in reminders where reminder.isEnabled { try await schedule(reminder) }
+    }
     func snooze(definitionId: UUID, name: String) async throws { snoozedDefinitionIds.append(definitionId) }
     func notifyGeofenceTransition(_ transition: GeofenceNotificationTransition,
                                   activityName: String,
@@ -564,4 +712,17 @@ private final class FakeNotificationService: NotificationServicing {
         geofenceTransitions.append((transition, activityName, placeName))
     }
     func emit(_ action: ReminderNotificationAction) { onAction?(action) }
+}
+
+@MainActor
+private final class FakeNotificationRequestStore: NotificationRequestStore {
+    var pendingRequests: [String: UNNotificationRequest] = [:]
+    var deliveredRequests: [UNNotificationRequest] = []
+    func pending() async -> [UNNotificationRequest] { Array(pendingRequests.values) }
+    func delivered() async -> [UNNotificationRequest] { deliveredRequests }
+    func add(_ request: UNNotificationRequest) async throws { pendingRequests[request.identifier] = request }
+    func removePending(_ identifiers: [String]) { identifiers.forEach { pendingRequests[$0] = nil } }
+    func removeDelivered(_ identifiers: [String]) {
+        deliveredRequests.removeAll { identifiers.contains($0.identifier) }
+    }
 }

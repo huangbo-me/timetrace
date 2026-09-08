@@ -53,51 +53,38 @@ https://github.com/huangbo-me/timetrace
 
 **审核备注**
 
-提交前请将以下英文内容粘贴到 App Store Connect 的“App Review Information → Notes”，并在 Resolution Center 回复中附上真机录屏。方括号内容必须替换为本次提交的真实设备、系统版本及录屏链接。
+以下为中文审核说明模板。提交时填写真实设备、系统版本及录屏链接；未完成真机录屏前，不应把模板描述作为已验证事实。
 
-```text
-Screen recording
-A screen recording captured on a physical [iPhone model] running iOS [version] is attached in Resolution Center and is also available at: [unlisted video URL].
+**录屏**
 
-The recording begins by launching the app and demonstrates the standard flow: completing the initial place setup, granting location and notification permissions, creating and viewing a place-based geofence, viewing Today, History, and Insights, creating a local reminder, and reviewing iCloud sync status in Settings.
+提供在实体［iPhone 型号］、iOS［系统版本］上的操作录屏。链接：［无需登录即可访问的录屏链接］。录屏从启动应用开始，展示恢复选择或首次地点配置、定位与通知授权、地点管理、今天、历史、统计及设置中的 iCloud 状态。
 
-App purpose and target audience
-TimeTrace (时迹) is a personal, place-based time-recording app for individual users, including office workers, students, and people tracking time spent at regular places such as workplaces, libraries, or gyms.
+**用途与用户**
 
-Users create one or more places and choose a geofence radius. When the device enters or exits a configured place, the app records the corresponding time session. Users can also review, correct, and manually add records. The app helps users reduce manual time tracking while keeping a clear history and summary of time spent.
+时迹是面向个人用户的地点时间记录工具，适用于工作地点、图书馆、健身房等常去地点的时间回顾。用户设置地点和围栏半径后，系统在检测到进入或离开时记录时段；用户可以查看、修改和手动补录。
 
-Setup and access instructions
-No account registration, login, or demo credentials are required.
+**访问步骤**
 
-1. Launch the app.
-2. During onboarding, create a place by selecting a location on the map or using the current location.
-3. Allow location access. “Always Allow” is needed for background geofence-based automatic recording.
-4. Allow notifications to receive optional local entry, exit, and reminder alerts.
-5. Use the Places tab to add or edit places; use Today, History, and Insights to review records and statistics.
-6. The app remains usable locally if the reviewer is not signed in to iCloud. iCloud sync is optional.
+1. 启动应用，不需要注册账号或提供演示登录信息。
+2. 空库且 iCloud 可用时，选择恢复已有数据或开启新记录；开启新记录不会删除云端已有数据。
+3. 在引导中通过地图、地址搜索或当前位置配置地点。
+4. 允许定位；后台围栏记录需要“始终允许”。通知权限用于可选的进出提示。本期设置页不提供活动提醒管理入口。
+5. 地点页可添加、编辑、删除地点；今天、历史和统计页查看记录。
+6. 不使用 iCloud 时仍可使用本机存储。iCloud 状态卡表示账户及存储配置状态，不表示全部数据已经传输完成。
 
-External services, tools, and platforms
-The app does not use third-party SDKs, advertising networks, analytics services, authentication services, payment processors, AI services, or external user-content services.
+**系统服务**
 
-Its core functionality uses Apple system frameworks and services:
-- Core Location for circular geofence monitoring and optional current-location selection.
-- MapKit and Apple Maps data for map display and place search.
-- UserNotifications for local reminders and optional geofence entry/exit notifications.
-- SwiftData for on-device storage.
-- Optional Apple CloudKit private database sync through the user’s own iCloud account (container: iCloud.com.chronora.time.trace).
+应用没有第三方运行时 SDK、广告网络、第三方分析、自建账户、支付或 AI 服务。主要使用 Core Location、MapKit、UserNotifications、SwiftData，以及可选的私有 CloudKit 数据库 `iCloud.com.chronora.time.trace`。
 
-Regional availability
-There are no intentionally different app features, content catalogs, prices, or user flows by region. The app is currently presented in Simplified Chinese. Map search results can vary according to Apple Maps availability and data in the user’s region; core local recording functionality is otherwise the same.
+**地区与内容**
 
-Regulated industries and third-party material
-The app is not a regulated-industry service and does not provide medical, financial, legal, or other regulated advice. It does not distribute protected third-party content.
-```
+界面为简体中文。地图搜索结果取决于 Apple 地图在所在地区的数据和服务可用性；内置工作日提示使用 2026 年中国节假日表。应用不提供医疗、金融或法律服务，不分发第三方受保护内容。
 
 **真机验收清单**
 
 1. 在最新 iOS 的实体 iPhone 上从主屏幕开始录屏并启动新安装的 App。
-2. 完成首次地点设置；允许“使用 App 期间”和后续的“始终允许”定位权限，以及通知权限。
-3. 验证地点保存、今日记录、历史、统计、提醒和设置页 iCloud 状态均可正常进入。
+2. 如出现恢复选择，先选择恢复或开启新记录，再完成地点设置；允许“使用 App 期间”和后续的“始终允许”定位权限，以及通知权限。
+3. 验证地点保存、今日记录、历史、统计和设置页 iCloud 状态均可正常进入。
 4. 单独进行实际进入和离开围栏的测试：确认后台唤醒后的记录与本地通知；不要以模拟器结果代替真机结论。
 5. 若要在 Notes 放录屏链接，使用审核员无需登录即可访问、不会过期的非公开链接；同时在 Resolution Center 上传原始录屏文件。
 
@@ -105,10 +92,10 @@ The app is not a regulated-industry service and does not provide medical, financ
 
 - 跟踪：否
 - 收集的数据：无（数据仅保存在设备上；如用户启用 iCloud，同步至用户私有的 iCloud 数据库，开发者不可访问）
-- 隐私政策网址：**待发布**。必须在 App Store Connect 填写后才能提交审核。
+- 隐私政策文件：[时迹隐私政策](PRIVACY_POLICY.md)。提交时核对 App Store Connect 已配置的公开地址，保留现有线上地址；本文不声明该地址的当前发布状态。
 
-## 尚需用户确认
+## 每次提交前核对
 
 1. 审核联系人的名字、姓氏、电话号码与邮箱。
-2. 公开的隐私政策网址；可以将本仓库新增的隐私政策发布到 GitHub 后使用其公开链接。
-3. 提交审核所用的构建版本；当前版本页尚未关联构建。
+2. 现有隐私政策公开地址是否可访问，且内容与本次代码一致。
+3. 提交审核所用的真实构建版本及关联状态，以 App Store Connect 当前页面为准；本次本地修复不代表已经上传或关联。

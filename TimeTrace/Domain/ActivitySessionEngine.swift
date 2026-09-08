@@ -3,6 +3,7 @@ import Foundation
 struct SessionEngineResult {
     var sessions: [ActivitySession]
     var createdSessions: [ActivitySession]
+    var supersededSessions: [ActivitySession] = []
 }
 
 struct ActivitySessionEngine {
@@ -24,6 +25,41 @@ struct ActivitySessionEngine {
             if $0.timestamp != $1.timestamp { return $0.timestamp < $1.timestamp }
             if $0.createdAt != $1.createdAt { return $0.createdAt < $1.createdAt }
             return $0.id.uuidString < $1.id.uuidString
+        }
+
+        // CloudKit may merge a source event before its projected session. Keep
+        // one stable record per start event even when both devices replay it.
+        let groups = Dictionary(grouping: existingSessions) { $0.startEventId ?? $0.id }
+        var canonical: [ActivitySession] = []
+        var superseded: [ActivitySession] = []
+        var sessionByID: [UUID: ActivitySession] = [:]
+        for group in groups.values {
+            let ranked = group.sorted {
+                if ($0.deletedAt != nil) != ($1.deletedAt != nil) { return $0.deletedAt != nil }
+                if ($0.status == .manuallyAdjusted) != ($1.status == .manuallyAdjusted) {
+                    return $0.status == .manuallyAdjusted
+                }
+                if $0.createdAt != $1.createdAt { return $0.createdAt < $1.createdAt }
+                return $0.id.uuidString < $1.id.uuidString
+            }
+            guard let survivor = ranked.first else { continue }
+            canonical.append(survivor)
+            superseded.append(contentsOf: ranked.dropFirst())
+            for record in ranked { sessionByID[record.id] = survivor }
+        }
+        let existingSessions = canonical
+        var correctionsByStart: [UUID: [ActivityEvent]] = [:]
+        let eventsByID = ordered.reduce(into: [UUID: ActivityEvent]()) { $0[$1.id] = $1 }
+        for correction in ordered where correction.eventType == .sessionAdjusted || correction.eventType == .sessionDeleted {
+            let values = correction.metadata.values
+            let startID = UUID(uuidString: values["startEventId"] ?? "")
+                ?? UUID(uuidString: values["sessionId"] ?? "").flatMap { sessionByID[$0]?.startEventId }
+            guard let startID else { correction.disposition = .orphaned; continue }
+            correctionsByStart[startID, default: []].append(correction)
+        }
+        for session in existingSessions {
+            applyUserCorrections(correctionsByStart[session.startEventId ?? session.id] ?? [],
+                                 to: session, eventsByID: eventsByID, now: now)
         }
 
         // A completed manual correction is an explicit user decision and must
@@ -53,6 +89,7 @@ struct ActivitySessionEngine {
         // that started at "家" and leave the real company exit orphaned.
         var activeByPlace: [UUID: Active] = [:]
         var activeWithoutPlace: Active?
+        var pendingPreservedExit: [UUID?: ActivitySession] = [:]
         var latestAppliedExitByPlace: [UUID: Date] = [:]
         var created: [ActivitySession] = []
 
@@ -64,6 +101,7 @@ struct ActivitySessionEngine {
 
             if let preservedSession = preservedByStart[event.id] {
                 event.disposition = .applied
+                pendingPreservedExit[preservedSession.placeTriggerId] = preservedSession.endEventId == nil ? preservedSession : nil
                 if let placeId = preservedSession.placeTriggerId {
                     activeByPlace[placeId] = .preserved(preservedSession)
                 } else {
@@ -74,12 +112,15 @@ struct ActivitySessionEngine {
 
             if preservedEndIds.contains(event.id) {
                 event.disposition = .applied
-                if let preservedSession = preserved.first(where: { $0.endEventId == event.id }),
-                   let placeId = preservedSession.placeTriggerId {
-                    activeByPlace[placeId] = nil
-                    latestAppliedExitByPlace[placeId] = event.timestamp
-                } else {
-                    activeWithoutPlace = nil
+                if let preservedSession = preserved.first(where: { $0.endEventId == event.id }) {
+                    if let placeId = preservedSession.placeTriggerId {
+                        if case .preserved(let active) = activeByPlace[placeId], active.id == preservedSession.id {
+                            activeByPlace[placeId] = nil
+                        }
+                        latestAppliedExitByPlace[placeId] = event.timestamp
+                    } else if case .preserved(let active) = activeWithoutPlace, active.id == preservedSession.id {
+                        activeWithoutPlace = nil
+                    }
                 }
                 continue
             }
@@ -92,6 +133,7 @@ struct ActivitySessionEngine {
                     event.disposition = .redundant
                     continue
                 }
+                pendingPreservedExit[placeId] = nil
                 let isManual = event.eventType == .manualStart || event.source == .user
                 let allowsExtendedDuration = allowsExtendedDuration(for: event)
                 let session: ActivitySession
@@ -106,6 +148,7 @@ struct ActivitySessionEngine {
                     session.updatedAt = now
                 } else {
                     session = ActivitySession(
+                        id: event.id,
                         activityId: event.activityId,
                         placeTriggerId: UUID(uuidString: event.metadata.values["placeTriggerId"] ?? ""),
                         startAt: event.timestamp,
@@ -118,7 +161,13 @@ struct ActivitySessionEngine {
                     created.append(session)
                 }
                 event.disposition = .applied
-                let nextActive = Active.automatic(session, event, allowsExtendedDuration: allowsExtendedDuration)
+                applyUserCorrections(correctionsByStart[event.id] ?? [], to: session, eventsByID: eventsByID, now: now)
+                let nextActive: Active = session.deletedAt != nil || session.endAt != nil
+                    ? .preserved(session)
+                    : .automatic(session, event, allowsExtendedDuration: allowsExtendedDuration)
+                if case .preserved = nextActive, session.endEventId == nil {
+                    pendingPreservedExit[placeId] = session
+                }
                 if let placeId {
                     activeByPlace[placeId] = nextActive
                 } else {
@@ -129,6 +178,12 @@ struct ActivitySessionEngine {
                 let currentActive = placeId.flatMap { activeByPlace[$0] }
                     ?? (placeId == nil ? activeWithoutPlace : nil)
                 guard let current = currentActive else {
+                    if let corrected = pendingPreservedExit.removeValue(forKey: placeId) {
+                        corrected.endEventId = event.id
+                        event.disposition = .applied
+                        if let placeId { latestAppliedExitByPlace[placeId] = event.timestamp }
+                        continue
+                    }
                     // Core Location reports the current state for a newly
                     // registered region, but it cannot reconstruct when the
                     // person originally arrived.  The first later exit is not
@@ -158,8 +213,14 @@ struct ActivitySessionEngine {
                     } else {
                         activeWithoutPlace = nil
                     }
-                case .preserved:
-                    event.disposition = .redundant
+                case .preserved(let session):
+                    session.endEventId = event.id
+                    event.disposition = .applied
+                    pendingPreservedExit[placeId] = nil
+                    if let placeId {
+                        activeByPlace[placeId] = nil
+                        latestAppliedExitByPlace[placeId] = event.timestamp
+                    } else { activeWithoutPlace = nil }
                 }
             } else {
                 event.disposition = .applied
@@ -179,9 +240,13 @@ struct ActivitySessionEngine {
             }
         }
 
-        applyUserCorrections(from: ordered, to: existingSessions + created, now: now)
+        for session in existingSessions + created {
+            applyUserCorrections(correctionsByStart[session.startEventId ?? session.id] ?? [],
+                                 to: session, eventsByID: eventsByID, now: now)
+        }
 
-        return SessionEngineResult(sessions: existingSessions + created, createdSessions: created)
+        return SessionEngineResult(sessions: existingSessions + created, createdSessions: created,
+                                   supersededSessions: superseded)
     }
 
     private func allowsExtendedDuration(for event: ActivityEvent) -> Bool {
@@ -202,6 +267,9 @@ struct ActivitySessionEngine {
         case .automatic(_, let startEvent, let allowsExtendedDuration):
             start = allowsExtendedDuration ? nil : startEvent.timestamp
         case .preserved(let session):
+            // A manual end can have no source exit event. Release the slot by
+            // its corrected end, rather than swallowing the next day's visits.
+            if let end = session.endAt, event.timestamp >= end { return nil }
             start = session.startAt
         }
         guard let start, event.timestamp.timeIntervalSince(start) >= Self.staleInterval else { return active }
@@ -220,47 +288,36 @@ struct ActivitySessionEngine {
     /// inferred from a geofence transition, so replay keeps the projection in
     /// step with its event history instead of relying on callers to mutate a
     /// managed Session as a second source of truth.
-    private func applyUserCorrections(from events: [ActivityEvent], to sessions: [ActivitySession], now: Date) {
+    private func applyUserCorrections(_ events: [ActivityEvent], to session: ActivitySession,
+                                      eventsByID: [UUID: ActivityEvent], now: Date) {
         let formatter = ISO8601DateFormatter()
-        let sessionsByID = Dictionary(uniqueKeysWithValues: sessions.map { ($0.id, $0) })
-        let sessionsByStartEvent = Dictionary(uniqueKeysWithValues: sessions.compactMap { session in
-            session.startEventId.map { ($0, session) }
-        })
-
-        for event in events {
-            guard event.eventType == .sessionAdjusted || event.eventType == .sessionDeleted else { continue }
+        formatter.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
+        func parseDate(_ raw: String) -> Date? {
+            formatter.date(from: raw) ?? ISO8601DateFormatter().date(from: raw)
+        }
+        // Only the latest adjustment describes the intended boundaries. A
+        // deletion remains a tombstone regardless of subsequent replay.
+        if let event = events.last(where: { $0.eventType == .sessionAdjusted }) {
             let values = event.metadata.values
-            let target = UUID(uuidString: values["sessionId"] ?? "").flatMap { sessionsByID[$0] }
-                ?? UUID(uuidString: values["startEventId"] ?? "").flatMap { sessionsByStartEvent[$0] }
-            guard let session = target else {
-                event.disposition = .orphaned
-                continue
-            }
-
-            switch event.eventType {
-            case .sessionAdjusted:
-                guard let startRaw = values["newStart"], let startAt = formatter.date(from: startRaw) else {
-                    event.disposition = .orphaned
-                    continue
-                }
-                let endAt = values["newEnd"].flatMap { $0.isEmpty ? nil : formatter.date(from: $0) }
-                guard endAt == nil || endAt! >= startAt else {
-                    event.disposition = .orphaned
-                    continue
-                }
-                session.startAt = startAt
-                session.endAt = endAt
-                session.status = .manuallyAdjusted
-                session.confidence = .confirmed
-                session.updatedAt = now
-                event.disposition = .applied
-            case .sessionDeleted:
-                session.deletedAt = event.timestamp
-                session.updatedAt = now
-                event.disposition = .applied
-            default:
-                break
-            }
+            if let startRaw = values["newStart"], let startAt = parseDate(startRaw) {
+                let endAt = values["newEnd"].flatMap { $0.isEmpty ? nil : parseDate($0) }
+                if endAt == nil || endAt! >= startAt {
+                    session.startAt = startAt
+                    let laterStop = session.endEventId.flatMap { eventsByID[$0] }
+                        .map { $0.timestamp > event.timestamp } ?? false
+                    if endAt != nil || !laterStop { session.endAt = endAt }
+                    session.status = session.endAt != nil ? .manuallyAdjusted
+                        : (session.status == .incomplete ? .incomplete : .active)
+                    session.confidence = .confirmed
+                    session.updatedAt = now
+                    event.disposition = .applied
+                } else { event.disposition = .orphaned }
+            } else { event.disposition = .orphaned }
+        }
+        for event in events where event.eventType == .sessionDeleted {
+            session.deletedAt = event.timestamp
+            session.updatedAt = now
+            event.disposition = .applied
         }
     }
 }

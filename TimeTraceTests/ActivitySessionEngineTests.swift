@@ -215,6 +215,95 @@ final class ActivitySessionEngineTests: XCTestCase {
         XCTAssertEqual(adjustment.disposition, .applied)
     }
 
+    func testManuallyClosedOpenSessionDoesNotSwallowNextVisit() {
+        let place = UUID()
+        let start = geofenceEvent(.geofenceEnter, placeId: place, hour: 9)
+        let original = engine.reconcile(events: [start], existingSessions: [], now: date(day: 1, hour: 10))
+        let session = original.sessions[0]
+        let correction = adjustment(session, start: start.timestamp, end: date(day: 1, hour: 11), hour: 12)
+        _ = engine.reconcile(events: [start, correction], existingSessions: original.sessions, now: date(day: 1, hour: 12))
+        let nextStart = geofenceEvent(.geofenceEnter, placeId: place, hour: 13)
+        let nextEnd = geofenceEvent(.geofenceExit, placeId: place, hour: 14)
+        let result = engine.reconcile(events: [start, correction, nextStart, nextEnd], existingSessions: original.sessions,
+                                      now: date(day: 1, hour: 15))
+        XCTAssertEqual(result.sessions.count, 2)
+        XCTAssertEqual(result.sessions.first { $0.startEventId == nextStart.id }?.endAt, nextEnd.timestamp)
+        XCTAssertEqual(nextStart.disposition, .applied)
+    }
+
+    func testEditingOpenStartDoesNotEraseLaterExitOnRepeatedReplay() {
+        let start = event(.geofenceEnter, 9)
+        var sessions = engine.reconcile(events: [start], existingSessions: [], now: date(day: 1, hour: 10)).sessions
+        let newStart = date(day: 1, hour: 8)
+        let correction = adjustment(sessions[0], start: newStart, end: nil, hour: 10)
+        sessions = engine.reconcile(events: [start, correction], existingSessions: sessions, now: date(day: 1, hour: 10)).sessions
+        let end = event(.geofenceExit, 18)
+        for _ in 0..<3 {
+            sessions = engine.reconcile(events: [start, correction, end], existingSessions: sessions,
+                                        now: date(day: 1, hour: 19)).sessions
+            XCTAssertEqual(sessions[0].startAt, newStart)
+            XCTAssertEqual(sessions[0].endAt, end.timestamp)
+            XCTAssertEqual(sessions[0].duration, 10 * 3600)
+        }
+    }
+
+    func testDuplicateCloudProjectionsAreCollapsedAndCorrectionSurvives() {
+        let start = event(.geofenceEnter, 9)
+        let end = event(.geofenceExit, 18)
+        let first = ActivitySession(activityId: activityId, startAt: start.timestamp,
+                                    endAt: end.timestamp, startEventId: start.id, endEventId: end.id)
+        let duplicate = ActivitySession(activityId: activityId, startAt: start.timestamp,
+                                        endAt: end.timestamp, startEventId: start.id, endEventId: end.id)
+        let correction = adjustment(duplicate, start: date(day: 1, hour: 8), end: end.timestamp, hour: 19)
+        let result = engine.reconcile(events: [start, end, correction], existingSessions: [first, duplicate],
+                                      now: date(day: 1, hour: 20))
+        XCTAssertEqual(result.sessions.count, 1)
+        XCTAssertEqual(result.supersededSessions.count, 1)
+        XCTAssertEqual(result.sessions[0].duration, 10 * 3600)
+        XCTAssertEqual(correction.disposition, .applied)
+        XCTAssertTrue(result.createdSessions.isEmpty)
+    }
+
+    func testIndependentReplaysUseTheSameSessionIdentity() {
+        let start = event(.geofenceEnter, 9)
+        let a = engine.reconcile(events: [start], existingSessions: [], now: date(day: 1, hour: 10))
+        let b = engine.reconcile(events: [start], existingSessions: [], now: date(day: 1, hour: 10))
+        XCTAssertEqual(a.sessions[0].id, b.sessions[0].id)
+    }
+
+    func testClosedCorrectionSurvivesFullRebuildWithoutBlockingNextVisit() {
+        let start = event(.geofenceEnter, 9)
+        let session = ActivitySession(activityId: activityId, startAt: start.timestamp, startEventId: start.id)
+        let correction = adjustment(session, start: start.timestamp, end: date(day: 1, hour: 11), hour: 12)
+        let nextStart = event(.geofenceEnter, 13)
+        let nextEnd = event(.geofenceExit, 14)
+        let result = engine.reconcile(events: [start, correction, nextStart, nextEnd], existingSessions: [],
+                                      now: date(day: 1, hour: 15))
+        XCTAssertEqual(result.sessions.count, 2)
+        XCTAssertEqual(result.sessions.first { $0.startEventId == start.id }?.endAt, date(day: 1, hour: 11))
+        XCTAssertEqual(result.sessions.first { $0.startEventId == nextStart.id }?.endAt, nextEnd.timestamp)
+    }
+
+    func testRebuiltCorrectionConsumesOriginalExitWithoutAnOrphan() {
+        let start = event(.geofenceEnter, 9)
+        let end = event(.geofenceExit, 18)
+        let session = ActivitySession(activityId: activityId, startAt: start.timestamp, startEventId: start.id)
+        let correction = adjustment(session, start: start.timestamp, end: date(day: 1, hour: 17), hour: 19)
+        let result = engine.reconcile(events: [start, end, correction], existingSessions: [], now: date(day: 1, hour: 20))
+        XCTAssertEqual(result.sessions[0].endAt, date(day: 1, hour: 17))
+        XCTAssertEqual(result.sessions[0].endEventId, end.id)
+        XCTAssertEqual(end.disposition, .applied)
+    }
+
+    private func adjustment(_ session: ActivitySession, start: Date, end: Date?, hour: Int) -> ActivityEvent {
+        ActivityEvent(activityId: activityId, eventType: .sessionAdjusted, timestamp: date(day: 1, hour: hour),
+                      source: .user, metadata: EventMetadata(values: [
+                        "sessionId": session.id.uuidString,
+                        "startEventId": session.startEventId!.uuidString,
+                        "newStart": start.ISO8601Format(), "newEnd": end?.ISO8601Format() ?? ""
+                      ]))
+    }
+
     private func event(_ type: ActivityEventType, _ hour: Int, minute: Int = 0,
                        source: ActivityEventSource = .coreLocation) -> ActivityEvent {
         ActivityEvent(activityId: activityId, eventType: type,

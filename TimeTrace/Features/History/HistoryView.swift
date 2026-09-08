@@ -118,7 +118,9 @@ struct HistoryView: View {
         .timeTraceScreen()
         .timeTraceTabTitle("历史记录")
         .sheet(item: $repairingEvent) { RepairOrphanedExitView(event: $0) }
-        .sheet(item: $selectedSummary) { HistoryDayDetailView(summary: $0, origins: origins) }
+        .sheet(item: $selectedSummary) { summary in
+            HistoryDayDetailView(summary: summary, origins: origins, onSaved: { selectedSummary = nil })
+        }
         .sheet(isPresented: $addingSession) { AddSessionView() }
     }
 
@@ -514,6 +516,7 @@ private struct HistoryDayDetailView: View {
     @Environment(\.dismiss) private var dismiss
     let summary: DailyActivitySummary
     let origins: [UUID: HistoryRecordOrigin]
+    let onSaved: () -> Void
     @State private var editingSession: ActivitySession?
 
     var body: some View {
@@ -561,7 +564,9 @@ private struct HistoryDayDetailView: View {
                     Button("完成") { dismiss() }
                 }
             }
-            .sheet(item: $editingSession) { EditSessionView(session: $0) }
+            .sheet(item: $editingSession) { session in
+                EditSessionView(session: session, onSaved: onSaved)
+            }
         }
     }
 }
@@ -703,6 +708,7 @@ struct EditSessionView: View {
     @EnvironmentObject private var store: HistoryFeatureStore
     @Environment(\.dismiss) private var dismiss
     let session: ActivitySession
+    let onSaved: () -> Void
     @State private var startAt: Date
     @State private var endAt: Date
     @State private var hasEnd: Bool
@@ -710,8 +716,9 @@ struct EditSessionView: View {
 
     private var model: AppModel { store.application }
 
-    init(session: ActivitySession) {
+    init(session: ActivitySession, onSaved: @escaping () -> Void = {}) {
         self.session = session
+        self.onSaved = onSaved
         _startAt = State(initialValue: session.startAt)
         _endAt = State(initialValue: session.endAt ?? Date())
         _hasEnd = State(initialValue: session.endAt != nil)
@@ -744,15 +751,19 @@ struct EditSessionView: View {
                 ToolbarItem(placement: .cancellationAction) { Button("取消") { dismiss() } }
                 ToolbarItem(placement: .confirmationAction) {
                     Button("保存") {
-                        model.adjustSession(session, startAt: startAt, endAt: hasEnd ? endAt : nil)
-                        dismiss()
+                        if model.adjustSession(session, startAt: startAt, endAt: hasEnd ? endAt : nil) {
+                            dismiss()
+                            onSaved()
+                        }
                     }.disabled(hasEnd && endAt < startAt)
                 }
             }
             .confirmationDialog("删除这条记录？", isPresented: $confirmingDeletion, titleVisibility: .visible) {
                 Button("删除", role: .destructive) {
-                    model.deleteSession(session)
-                    dismiss()
+                    if model.deleteSession(session) {
+                        dismiss()
+                        onSaved()
+                    }
                 }
                 Button("取消", role: .cancel) {}
             } message: {

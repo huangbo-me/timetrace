@@ -23,6 +23,7 @@ final class EventPipeline {
         let existing = try sessions.fetch(activityId: event.activityId)
         let result = engine.reconcile(events: activityEvents, existingSessions: existing,
                                       now: now, timeZoneIdentifier: timeZoneIdentifier)
+        if !result.supersededSessions.isEmpty { try sessions.delete(result.supersededSessions) }
         for session in result.createdSessions { try sessions.save(session) }
         try sessions.saveChanges()
         try events.saveProcessingChanges()
@@ -38,6 +39,7 @@ final class EventPipeline {
             now: now,
             timeZoneIdentifier: timeZoneIdentifier
         )
+        if !result.supersededSessions.isEmpty { try sessions.delete(result.supersededSessions) }
         for session in result.createdSessions { try sessions.save(session) }
         try sessions.saveChanges()
         try events.saveProcessingChanges()

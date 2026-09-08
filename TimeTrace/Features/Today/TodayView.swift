@@ -62,6 +62,32 @@ enum TodayWorkdayRule {
     }
 }
 
+/// Work totals use place purpose as well as activity identity: home and office
+/// geofences can both belong to the default work activity.
+struct TodayWorkSummary {
+    let sessions: [ActivitySession]
+
+    init(sessions: [ActivitySession], places: [ActivityTrigger], workActivityId: UUID?) {
+        self.sessions = sessions.filter { session in
+            guard session.deletedAt == nil, let workActivityId,
+                  session.activityId == workActivityId else { return false }
+            // Manual work has no place. An unresolved place must not be
+            // assumed to be work, since it may have been a home or other place.
+            guard let placeId = session.placeTriggerId else { return true }
+            return places.first(where: { $0.id == placeId })?.placeType == .work
+        }
+    }
+
+    var firstArrivalTime: Date? { sessions.map(\.startAt).min() }
+
+    func duration(now: Date) -> TimeInterval {
+        sessions.reduce(0) { total, session in
+            total + (session.duration ?? (session.status == .active
+                ? max(0, now.timeIntervalSince(session.startAt)) : 0))
+        }
+    }
+}
+
 struct TodayView: View {
     @EnvironmentObject private var store: TodayFeatureStore
     @AppStorage("profileNickname") private var profileNickname = ""
@@ -133,7 +159,9 @@ struct TodayView: View {
         }
         let activePlaceType = activePlace?.placeType
         let dayStatus = ChinaWorkCalendar.status(for: now)
-        let hasRecordedWork = summary?.sessions.contains(where: isWorkSession) ?? false
+        let workSummary = TodayWorkSummary(sessions: summary?.sessions ?? [], places: model.triggers,
+                                           workActivityId: model.workActivity?.id)
+        let hasRecordedWork = !workSummary.sessions.isEmpty
         let hasRecordedActivity = !(summary?.sessions.isEmpty ?? true)
         let mode = TodayWorkdayRule.mode(
             isWorkday: dayStatus.isWorkday,
@@ -158,12 +186,12 @@ struct TodayView: View {
                 }
             }
             VStack(alignment: .leading, spacing: 4) {
-                Text(mode == .rest ? "今日安排" : (hasRecordedWork ? "今日累计工作时长" : "今日累计活动时长"))
+                Text(mode == .rest ? "今日安排" : "今日累计工作时长")
                     .font(.caption).foregroundStyle(.white.opacity(0.8))
-                Text(summary.map { TimeTraceFormat.duration(liveDuration($0, now: now)) } ?? (mode == .rest ? "无需记录" : "尚未开始"))
+                Text(summary.map { _ in TimeTraceFormat.duration(workSummary.duration(now: now)) } ?? (mode == .rest ? "无需记录" : "尚未开始"))
                     .font(.system(size: 29, weight: .bold, design: .rounded))
                     .monospacedDigit()
-                if let summary, let arrival = summary.firstArrivalTime {
+                if let arrival = workSummary.firstArrivalTime {
                     Text("到达 \(TimeTraceFormat.time.string(from: arrival))")
                         .font(.caption.weight(.medium)).foregroundStyle(.white.opacity(0.82))
                 }
@@ -179,16 +207,6 @@ struct TodayView: View {
         .frame(maxWidth: .infinity, alignment: .leading)
         .background(TimeTraceDesign.heroGradient, in: RoundedRectangle(cornerRadius: 22, style: .continuous))
         .shadow(color: TimeTraceDesign.violet.opacity(0.22), radius: 16, y: 9)
-    }
-
-    private func isWorkSession(_ session: ActivitySession) -> Bool {
-        guard let placeTriggerId = session.placeTriggerId,
-              let place = model.triggers.first(where: { $0.id == placeTriggerId }) else {
-            // A manual entry in the work-oriented Today tab has no place, but
-            // still represents work unless a future activity selector says otherwise.
-            return true
-        }
-        return place.placeType == .work
     }
 
     private var activeReminders: some View {
@@ -218,12 +236,6 @@ struct TodayView: View {
         let start = calendar.startOfDay(for: Date())
         let end = calendar.date(byAdding: .day, value: 1, to: start)!
         return model.dailySummaries(interval: DateInterval(start: start, end: end)).first
-    }
-
-    private func liveDuration(_ summary: DailyActivitySummary, now: Date) -> TimeInterval {
-        summary.totalDuration + summary.sessions.filter { $0.status == .active }.reduce(0) {
-            $0 + max(0, now.timeIntervalSince($1.startAt))
-        }
     }
 
     private func reminderName(_ instance: ReminderInstance) -> String {

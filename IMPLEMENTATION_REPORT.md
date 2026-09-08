@@ -1,69 +1,59 @@
-# TimeTrace MVP 实施报告
+# TimeTrace 修复与验证报告
 
-## 修改文件
+核对日期：2026 年 9 月 8 日。本文记录本次代码审查后的修复和验证，不代表 App Store 已发布这些改动。
 
-- 工程：`TimeTrace.xcodeproj`、共享 Scheme、`.gitignore`
-- 架构：`CURRENT_ARCHITECTURE.md`、`MVP_ARCHITECTURE.md`
-- App：依赖组装、统一 `AppModel`、根导航
-- Domain：Activity/Event/Session/Evidence/Reminder 模型、Repository 协议、Session Engine、Analytics
-- Persistence：SwiftData Container 与各 Repository 实现
-- Services：Event Pipeline、CoreLocation、UserNotifications、Screen Time Stub
-- Features：Onboarding、Today、History、Insights、Settings 与公共格式化
-- Tests：Session Engine、Analytics、SwiftData/Pipeline/Fake System Service 测试
+## 本次修复
 
-## 数据模型与状态机
+| 问题 | 当前处理 | 验证方式 |
+| --- | --- | --- |
+| 相同开始事件的重复会话导致崩溃 | 按开始事件合并投影，新会话使用稳定标识，清理多余投影 | 引擎重复输入测试、SwiftData 分批加入重复投影测试 |
+| 删除最后一个地点后卡在引导 | 是否已配置由默认工作活动判断，重新配置复用旧活动 | 删除最后地点并再次添加的应用用例测试 |
+| 手动补齐结束后吞掉后续到访 | 按修正结束时间释放运行状态，并消费原停止事件 | 后续进出与从空投影重建测试 |
+| 修改进行中的开始时间后无法结束 | 旧空结束值不覆盖修改之后的实际停止事件 | 连续多次回放测试 |
+| 云端删除提醒后本机仍弹旧通知 | 数据刷新后核对全部通知请求，空定义列表也清理 | 真实通知适配器配合替代系统请求存储测试 |
+| 不同周复用旧提醒实例 | 实例键加入实际投递时间，同次开始操作去重 | 跨周投递和重复开始测试 |
+| 删除提醒未取消延后通知 | 普通、延后及已投递通知按定义一起清理 | 排程、延后、删除完整路径测试 |
+| 历史详情编辑后数据过期 | 修改或删除成功后关闭详情，返回重算列表 | 调用链检查及编译验证，未做自动化点击验收 |
+| 定位未完成时搜索按钮卡住 | 所有入口先验证城市状态，再设置搜索中，并用 defer 复位 | 键盘与按钮入口检查及编译验证 |
+| 首页把非工作时长显示成工作 | 工作时长仅包含默认工作活动下的工作地点及无地点手动会话 | 数据口径回归测试与页面源码核对 |
+| 设置页数量显示代码原文 | 修正字符串插值 | 源码检查及编译验证 |
+| 设置页将提醒触发器算作地点 | 地点数量仅统计地理围栏触发器 | 源码检查及 Release 编译验证 |
+| 本机存储提示会自动恢复云同步 | 单独提示检查 iCloud 登录并重新启动应用 | 对照存储初始化与状态检查调用链 |
 
-所有系统和人工输入先追加 `ActivityEvent`；事实字段不删除、不覆盖。Session Engine
-按时间顺序重放 Event，并将处理结果标记为 applied、redundant 或 orphaned。
+保留现有五个页面、导航与视觉结构。没有进行全局架构重写，也没有向 App Store 发布这些改动。设备备份保留在本机，并通过 `.gitignore` 排除。
 
-Session 支持 active、completed、incomplete、manuallyAdjusted。跨午夜不拆分；24 小时
-未闭合转 incomplete，但不伪造 endAt。用户删除为软删除，原始 Event 保留。
+## 回归验证
 
-Reminder 将 scheduled、reminded、started、inProgress、completed/abandoned 与 snoozed、
-skipped、ignored 分开，避免把通知送达当成活动完成。
+环境：Xcode 工具链、iPhone 17 Pro、iOS 26.4.1 模拟器。
 
-## Geofence 工作流程
+首次加入的三个回归用例在修改前执行失败，共 12 处断言失败，覆盖人工结束、修改进行中记录和删除最后地点。
 
-用户可通过 MapKit 搜索公司/地址、高精度当前位置、轻点地图或拖动红色大头针配置公司围栏；
-地图同时显示系统蓝色当前位置、围栏圆与定位精度。CoreLocation 只注册圆形区域，不持续保存轨迹。
-进入/离开回调统一转换为 geofenceEnter/geofenceExit Event，然后交给 Event Pipeline。
-启动时恢复监控并请求 region state；state 本身不伪造成边界事件。
+本次提交前完整 XCTest：**74 项通过，0 失败，0 跳过**。包括既有手动两次事件入库、通知冷启动、人工修改与软删除、地点配对、统计，以及新增的重复投影、通知请求清理和今天页工作时长测试。随后修正的设置页计数与提示通过 Release 编译验证。
 
-## Notification 工作流程
+测试命令（设备标识使用本机实际可用模拟器）：
 
-App 启动注册 Activity Reminder Category。开始、稍后、跳过分别追加对应 Event；稍后会
-创建 10 分钟后的一次性通知。开始会创建 Session，Today 提供完成和放弃。明确收到通知
-dismiss callback 时标记 ignored；系统未回调的通知保持 unresolved。
+```bash
+DEVELOPER_DIR=/Applications/Xcode.app/Contents/Developer \
+xcodebuild -project TimeTrace.xcodeproj -scheme TimeTrace \
+  -destination 'platform=iOS Simulator,id=DAE0D2F9-C22B-4335-8C19-5F784B56B8BF' \
+  -derivedDataPath /tmp/TimeTracePushReview \
+  -resultBundlePath /tmp/TimeTracePushReview-20260908.xcresult \
+  -parallel-testing-enabled NO test
+```
 
-## 已实现能力
+结果包路径是本机验证产物，不随仓库分发。重复运行时应选择未使用的结果包路径。首次环境准备与构建耗时不计入用例执行耗时。
 
-- 公司位置、围栏半径、工作日与正常时间配置
-- 公司名/地址搜索、候选地址选择与当前位置兜底
-- 自动围栏 Event Pipeline 与多段工作 Session
-- 重复、孤立、乱序、跨天、缺失 Exit 和 24 小时 stale 处理
-- History 修改、补录、软删除
-- 异常记录置顶；缺少到达/离开时可手动补齐，并支持忽略异常
-- 近三天、本周、上一周、最近一个月及自定义范围画像；时长/到达/离开按天趋势曲线和等长周期比较
-- 多活动按周提醒、通知 Action、完成/放弃闭环
-- Screen Time protocol 与无 entitlement Stub
-- SwiftData 本地持久化及 Repository 隔离
+Release 模拟器构建：**通过**（通用 iOS 模拟器目标）。`git diff --check` 通过。构建仍有原有 `CLGeocoder` 弃用警告；本次未迁移地址反查 API。
 
-## 尚未实现
+## 文档同步
 
-- CloudKit、自建服务器、AI 文案
-- FamilyControls/ManagedSettings/DeviceActivity 与 App Shield
-- 连续定位轨迹、复杂催促策略
-- iPad 专用布局与英文资源
+README 说明可见功能和运行方式；CURRENT_ARCHITECTURE 说明真实模块依赖、同步触发点、事件与投影边界；MVP_ARCHITECTURE 保留实现规则摘要；App Store 资料和隐私政策与当前功能范围对齐。文档采用简体中文，代码标识保留原名。
 
-## 测试结果
+## 尚未由本次验证证明的行为
 
-- Xcode 26.4.1，iPhone 17 Pro / iOS 26.4.1 Simulator
-- Clean build：成功
-- Unit tests：33 passed，0 failed，0 skipped
-- 模拟器安装与首屏启动：成功
+- 真实 CloudKit 的多设备导入顺序、卸载重装与账户切换恢复；测试只模拟重复投影输入，不代表完成双设备验证。
+- 真机后台围栏唤醒、系统通知送达、强制结束应用后的行为。
+- 历史详情关闭、键盘搜索和文案的完整真机点击验收。
+- App Store 当前构建关联、审核或线上发布状态。本次未修改远端资料。
 
-## 当前风险与下一阶段
-
-- Always Location、真实围栏后台唤醒、强制结束 App 后行为需要使用当前 Bundle ID `com.chronora.time.trace` 完成签名和真机验证。
-- iOS 不保证所有通知消失场景产生 dismiss callback，不能自动把未知情况标成 ignored。
-- 下一阶段优先做真机矩阵验证、定位权限降级提示、数据导出/备份，再评估 CloudKit 与 Screen Time entitlement。
+已知实现边界见 [当前架构](CURRENT_ARCHITECTURE.md)：包括有限次数的云刷新、尚未完全收口的页面 Store、没有滚动通知排程、原始业务事件保留，以及屏幕使用时间仅有 Stub。

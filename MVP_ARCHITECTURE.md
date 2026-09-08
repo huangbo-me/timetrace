@@ -1,89 +1,48 @@
-# TimeTrace MVP 架构
+# TimeTrace 实现原则与状态规则
 
-## 原则
+本文是当前实现的简要说明；完整调用关系和边界以 [当前架构](CURRENT_ARCHITECTURE.md) 为准，最新验证以 [实施报告](IMPLEMENTATION_REPORT.md) 为准。
 
-TimeTrace 使用 Event First → Session Second → Insight Last 的单向数据流：
+## 数据流
 
-```text
-CoreLocation / Notification / Manual Action
-                    ↓
-              ActivityEvent
-                    ↓
-           ActivityEventRepository
-                    ↓
-           ActivitySessionEngine
-                    ↓
-              ActivitySession
-                    ↓
-             AnalyticsService
-```
-
-原始 Event 只追加；Session 可由排序后的 Event 确定性重放。UI 不访问 SwiftData
-`ModelContext`，只调用 Repository、Service 与 AppStore。
-
-## 目录
+地点回调、提醒操作和手动输入先生成事件，再由会话引擎形成记录，最后由统计服务计算汇总。孤立离开的人工补齐例外：追加手动开始事件后，直接保存与指定离开事件绑定的人工会话。
 
 ```text
-TimeTrace/
-  App/
-  Domain/
-  Persistence/
-  Services/
-  Features/
-TimeTraceTests/
+系统或用户输入 → ActivityEvent → EventPipeline → ActivitySessionEngine
+                                                    ↓
+                                             ActivitySession
+                                                    ↓
+                                             AnalyticsService
 ```
 
-保持单一 App target 和单一 Test target，不拆分模块或引入第三方依赖。
+UI 通过 FeatureStore 中的共享 AppModel 调用用例。UI 不操作 ModelContext，但仍读取 SwiftData 模型；不可变值映射尚未全面接入。项目保持一个 App Target、一个 Test Target，无第三方运行时依赖。
 
-## 领域模型
+## 会话规则
 
-- `ActivityDefinition`：用户定义的 work/study/exercise/focus/custom 活动。
-- `ActivityTrigger`：geofence、schedule、manual、appUsage 触发配置。
-- `ActivityEvent`：不可删除的事实记录；处理结果仅标注 applied/redundant/orphaned。
-- `ActivitySession`：一次活动，包含起止 Event、状态、置信度与软删除标记。
-- `ActivityEvidence`：未来设备使用等执行证据的最小扩展点。
-- `ReminderDefinition/ReminderInstance`：提醒定义与每次触发实例分离。
+- 地点事件按活动和地点分别配对，不同地点的离开不会结束彼此的会话。
+- 重复到达不会创建额外会话；无匹配到达的离开通常是待补齐异常。
+- 新注册围栏时已在内部的首次离开，以及同地点 5 秒内紧随已应用离开的重复离开，不要求用户补造到达时间。
+- 工作或无地点会话缺少结束且超过 24 小时后标为不完整。非工作地点可跨多日停留；跨午夜不自动关闭。
+- 开始事件标识决定新会话标识；回放合并同一开始事件的重复投影。用户软删除及人工修正优先保留。
+- 人工关闭释放运行状态；旧的空结束时间修改不会抹掉后续真实离开。最新人工修改决定修正边界。
+- 原始业务事件保留，处理状态可更新；重复会话投影和 Debug 演示数据可以被实际清理。
 
-SwiftData 模型使用 UUID 主键和可选关联标识，不使用 CloudKit 专用设计。
+## 提醒规则
 
-## Session 状态机
+本期设置页不提供提醒管理入口；以下底层实现保留，以兼容已有数据。
 
-```text
-start event ──→ active ──stop event──→ completed
-                   │
-                   ├─ 24h 无 stop ──→ incomplete
-                   └─ 人工修正 ─────→ manuallyAdjusted
-```
+提醒定义和实例分离。系统重复请求按星期排程；每次可观测通知投递由请求标识与投递时间区分。开始、延后、跳过、完成和放弃是不同事件，通知送达不代表完成活动。
 
-- active 时再次收到 start：Event 保留并标记 redundant。
-- 无 active 时收到 stop：Event 标记 orphaned。
-- 跨午夜不关闭；统计归属 startAt 所在日期。
-- 人工补录、修改和删除都写审计 Event；删除是软删除。
-- History 将缺失起止事件的异常置顶：缺少离开时用 adjustment 补齐，孤立离开时追加
-  manualStart 后确定性重放；忽略异常会追加 anomalyDismissed，原始定位 Event 仍不删除。
+重复开始回调不会重复创建会话。删除或停用定义后，会清理对应的普通、延后和已投递通知；跨设备更改需等本机数据刷新与请求核对后生效。无回调的后台通知不保证存在实例，也不自动判为忽略。
 
-## Reminder 状态机
+## 统计规则
 
-```text
-scheduled → reminded → started → inProgress → completed
-                    │               └────────→ abandoned
-                    ├→ snoozed → scheduled
-                    ├→ skipped
-                    └→ ignored（仅明确 dismiss 时）
-```
+- 按会话开始日期归属，跨日不拆分。
+- 总时长累加闭合且未删除会话；重叠时段不做并集去重。
+- 不完整日的已知时长进入总量，但不进入平均每日时长。
+- 到达、离开的平均分别使用拥有对应时间的数据日。
+- 页面周期包括近三天、本周、上一周、最近 30 天、自定义范围；月汇总也有领域服务接口。
+- 工作日和常规工时配置当前仅保存，不过滤实际事件，不限制自动记录。
 
-通知送达、活动开始与活动完成是三个不同事实。
+## 平台范围
 
-## 数据与统计口径
-
-- 工作日使用围栏配置时保存的时区，周为周一至周日。
-- Daily 总时长为所有已闭合、未删除 Session 的时长之和。
-- 不完整日的已知时长进入总计，但不进入平均工时。
-- 到达/离开平均分别使用拥有对应时间的数据日。
-- Weekly 与 Monthly 都返回结构化数据及上一周期差值；缺数据时差值为 nil。
-
-## MVP 边界
-
-- 仅 iPhone、iOS 26、简体中文。使用 SwiftData，并在可用时同步到私有 CloudKit 数据库。
-- 不实现自建服务器、AI、连续轨迹或 App Shield。公司位置支持本地 MapKit 地址搜索。
-- Screen Time 仅提供协议和可测试 Stub，不引入 entitlement。
+支持 iPhone、iOS 26 和简体中文。SwiftData 本机存储可在初始化条件满足时接入私有 CloudKit；围栏和通知注册属于设备状态，需要本机重建。无连续轨迹、自建服务器、AI、第三方统计 SDK 或 App Shield。Screen Time 只有协议与 Stub。
