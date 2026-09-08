@@ -148,8 +148,7 @@ struct HistoryView: View {
     }
 
     private var workSessions: [ActivitySession] {
-        guard let workActivityId = model.workActivity?.id else { return [] }
-        return model.sessions.filter { $0.activityId == workActivityId && $0.deletedAt == nil }
+        model.workSessions
     }
 
     private var originBySessionID: [UUID: HistoryRecordOrigin] {

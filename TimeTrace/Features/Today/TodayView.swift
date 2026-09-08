@@ -67,10 +67,10 @@ enum TodayWorkdayRule {
 struct TodayWorkSummary {
     let sessions: [ActivitySession]
 
-    init(sessions: [ActivitySession], places: [ActivityTrigger], workActivityId: UUID?) {
+    init(sessions: [ActivitySession], places: [ActivityTrigger], workActivityIDs: Set<UUID>) {
         self.sessions = sessions.filter { session in
-            guard session.deletedAt == nil, let workActivityId,
-                  session.activityId == workActivityId else { return false }
+            guard session.deletedAt == nil,
+                  workActivityIDs.contains(session.activityId) else { return false }
             // Manual work has no place. An unresolved place must not be
             // assumed to be work, since it may have been a home or other place.
             guard let placeId = session.placeTriggerId else { return true }
@@ -161,7 +161,7 @@ struct TodayView: View {
         let activePlaceType = activePlace?.placeType
         let dayStatus = ChinaWorkCalendar.status(for: now)
         let workSummary = TodayWorkSummary(sessions: summary?.sessions ?? [], places: model.triggers,
-                                           workActivityId: model.workActivity?.id)
+                                           workActivityIDs: model.workActivityIDs)
         let hasRecordedWork = !workSummary.sessions.isEmpty
         let hasRecordedActivity = !(summary?.sessions.isEmpty ?? true)
         let mode = TodayWorkdayRule.mode(

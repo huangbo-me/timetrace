@@ -77,14 +77,22 @@ final class AppModel: ObservableObject {
     private var pendingNotificationActions: [ReminderNotificationAction] = []
 
     var workActivity: ActivityDefinition? { activities.first { $0.type == .work } }
+    // Independent stores can contribute different work activity IDs through
+    // backup import or CloudKit. The default is only the destination for new
+    // records; all work libraries remain visible without rewriting their IDs.
+    var workActivityIDs: Set<UUID> { Set(activities.filter { $0.type == .work }.map(\.id)) }
+    var workSessions: [ActivitySession] {
+        let ids = workActivityIDs
+        return sessions.filter { ids.contains($0.activityId) && $0.deletedAt == nil }
+    }
     var workTriggers: [ActivityTrigger] {
-        guard let id = workActivity?.id else { return [] }
+        let ids = workActivityIDs
         return triggers
-            .filter { $0.activityId == id && $0.type == .geofence }
+            .filter { ids.contains($0.activityId) && $0.type == .geofence }
             .sorted { $0.createdAt < $1.createdAt }
     }
     var workTrigger: ActivityTrigger? {
-        workTriggers.first
+        workTriggers.first { $0.activityId == workActivity?.id } ?? workTriggers.first
     }
     var automaticRecordingDetail: String {
         guard workTriggers.contains(where: { $0.isEnabled && !$0.isDemoData }) else {
@@ -101,14 +109,14 @@ final class AppModel: ObservableObject {
     var isOnboarded: Bool { workActivity != nil }
     var activeReminderInstances: [ReminderInstance] { reminderInstances.filter { $0.status == .inProgress } }
     var orphanedWorkExitEvents: [ActivityEvent] {
-        guard let activityId = workActivity?.id else { return [] }
+        let ids = workActivityIDs
         let dismissedIds = Set(events.compactMap { event -> UUID? in
             guard event.eventType == .anomalyDismissed,
                   let value = event.metadata.values["eventId"] else { return nil }
             return UUID(uuidString: value)
         })
         return events.filter {
-            $0.activityId == activityId &&
+            ids.contains($0.activityId) &&
             $0.eventType == .geofenceExit &&
             $0.disposition == .orphaned &&
             !dismissedIds.contains($0.id)
@@ -932,29 +940,29 @@ final class AppModel: ObservableObject {
     }
 
     func dailySummaries(interval: DateInterval) -> [DailyActivitySummary] {
-        guard let workActivity else { return [] }
-        return analytics.dailySummaries(sessions: sessions, activityId: workActivity.id,
+        guard workActivity != nil else { return [] }
+        return analytics.dailySummaries(sessions: workSessions, activityId: nil,
                                         interval: interval, calendar: workCalendar())
     }
 
     func weeklySummary(containing date: Date = Date()) -> PeriodActivitySummary? {
-        guard let workActivity else { return nil }
-        return analytics.weeklySummary(sessions: sessions, activityId: workActivity.id,
+        guard workActivity != nil else { return nil }
+        return analytics.weeklySummary(sessions: workSessions, activityId: nil,
                                        containing: date, calendar: workCalendar())
     }
 
     func monthlySummary(containing date: Date = Date()) -> PeriodActivitySummary? {
-        guard let workActivity else { return nil }
-        return analytics.monthlySummary(sessions: sessions, activityId: workActivity.id,
+        guard workActivity != nil else { return nil }
+        return analytics.monthlySummary(sessions: workSessions, activityId: nil,
                                         containing: date, calendar: workCalendar())
     }
 
     func periodSummary(interval: DateInterval, previous: DateInterval,
                        placeFilter: PlaceSessionFilter = .all) -> PeriodActivitySummary? {
-        guard let workActivity else { return nil }
+        guard workActivity != nil else { return nil }
         return analytics.periodSummary(
-            sessions: sessions,
-            activityId: workActivity.id,
+            sessions: workSessions,
+            activityId: nil,
             interval: interval,
             previous: previous,
             placeFilter: placeFilter,
@@ -963,8 +971,8 @@ final class AppModel: ObservableObject {
     }
 
     func placeSummaries(interval: DateInterval) -> [PlaceActivitySummary] {
-        guard let workActivity else { return [] }
-        return analytics.placeSummaries(sessions: sessions, activityId: workActivity.id, interval: interval)
+        guard workActivity != nil else { return [] }
+        return analytics.placeSummaries(sessions: workSessions, activityId: nil, interval: interval)
     }
 
     func session(for instance: ReminderInstance) -> ActivitySession? {

@@ -6,6 +6,71 @@ import UserNotifications
 
 @MainActor
 final class RepositoryTests: XCTestCase {
+    func testBackupMergeKeepsBothWorkLibrariesVisibleRegardlessOfCreationOrder() throws {
+        for importedIsOlder in [true, false] {
+            let sourceGeofence = FakeGeofenceService()
+            let source = AppModel(inMemory: true, geofence: sourceGeofence, notifications: FakeNotificationService())
+            source.load()
+            source.finishOnboarding(latitude: 31.2, longitude: 121.4, radius: 150,
+                                    weekdaysMask: 62, normalStartMinute: nil, normalEndMinute: nil)
+            let sourcePlace = try XCTUnwrap(source.workTrigger)
+            let start = Calendar.current.startOfDay(for: Date()).addingTimeInterval(-86_400 + 3600)
+            sourceGeofence.emit(.entered(triggerId: sourcePlace.id, timestamp: start))
+            sourceGeofence.emit(.exited(triggerId: sourcePlace.id, timestamp: start.addingTimeInterval(3600)))
+            var snapshot = try source.backupSnapshot()
+            snapshot.activities[0].createdAt = Date().addingTimeInterval(importedIsOlder ? -1000 : 1000)
+            // An unrelated activity must not leak into work totals when the
+            // analytics query no longer filters by a single work UUID.
+            let exercise = ActivityDefinition(name: "运动", type: .exercise)
+            let exerciseStart = ActivityEvent(activityId: exercise.id, eventType: .manualStart,
+                                              timestamp: start, source: .user)
+            let exerciseStop = ActivityEvent(activityId: exercise.id, eventType: .manualStop,
+                                             timestamp: start.addingTimeInterval(1800), source: .user)
+            snapshot.activities.append(ActivityDefinitionRecord(exercise))
+            snapshot.events += [ActivityEventRecord(exerciseStart), ActivityEventRecord(exerciseStop)]
+
+            let targetGeofence = FakeGeofenceService()
+            let target = AppModel(inMemory: true, geofence: targetGeofence, notifications: FakeNotificationService())
+            target.load()
+            target.finishOnboarding(latitude: 32.2, longitude: 120.4, radius: 150,
+                                    weekdaysMask: 62, normalStartMinute: nil, normalEndMinute: nil)
+            let localPlace = try XCTUnwrap(target.workTrigger)
+            targetGeofence.emit(.entered(triggerId: localPlace.id, timestamp: start))
+            targetGeofence.emit(.exited(triggerId: localPlace.id, timestamp: start.addingTimeInterval(7200)))
+            let workSessionIDs = Set(target.sessions.map(\.id)).union(snapshot.sessions.map(\.id))
+            let originalSessionIDs = workSessionIDs.union([exerciseStart.id])
+            let interval = DateInterval(start: start.addingTimeInterval(-1), duration: 86_400)
+            let previous = DateInterval(start: interval.start.addingTimeInterval(-86_400), duration: 86_400)
+
+            XCTAssertNil(try target.importBackup(snapshot).refreshWarning)
+            XCTAssertEqual(Set(target.workTriggers.map(\.id)), [localPlace.id, sourcePlace.id])
+            XCTAssertEqual(target.dailySummaries(interval: interval).first?.totalDuration, 10_800)
+            XCTAssertEqual(target.periodSummary(interval: interval, previous: previous)?.totalWorkDuration, 10_800)
+            XCTAssertEqual(target.weeklySummary(containing: start)?.totalWorkDuration, 10_800)
+            XCTAssertEqual(target.monthlySummary(containing: start)?.totalWorkDuration, 10_800)
+            XCTAssertEqual(target.placeSummaries(interval: interval).count, 2)
+            XCTAssertEqual(Set(target.workSessions.map(\.id)), workSessionIDs)
+            XCTAssertEqual(TodayWorkSummary(sessions: target.workSessions, places: target.workTriggers,
+                                           workActivityIDs: target.workActivityIDs).duration(now: start.addingTimeInterval(10_800)), 10_800)
+            XCTAssertEqual(target.periodSummary(interval: interval, previous: previous,
+                                                placeFilter: .place(sourcePlace.id))?.totalWorkDuration, 3600)
+            XCTAssertEqual(Set(target.sessions.map(\.id)), originalSessionIDs)
+            XCTAssertEqual(try target.importBackup(snapshot).insertedCount, 0)
+            for id in [sourcePlace.id, localPlace.id] {
+                targetGeofence.emit(.exited(triggerId: id, timestamp: start.addingTimeInterval(12_000)))
+                targetGeofence.emit(.entered(triggerId: id, timestamp: Date().addingTimeInterval(-60)))
+            }
+            XCTAssertEqual(target.orphanedWorkExitEvents.count, 2)
+            XCTAssertEqual(target.workSessions.filter { $0.endAt == nil }.count, 2)
+            let allSessionIDs = Set(target.sessions.map(\.id))
+            // Both imported and local places must remain manageable after merging.
+            let importedPlace = try XCTUnwrap(target.triggers.first { $0.id == sourcePlace.id })
+            XCTAssertTrue(target.deleteWorkplace(importedPlace))
+            XCTAssertTrue(target.deleteWorkplace(localPlace))
+            XCTAssertEqual(Set(target.sessions.map(\.id)), allSessionIDs)
+        }
+    }
+
     func testBackupImportRebuildsSessionsAndRefreshesFeatureStoresAndServices() async throws {
         let sourceGeofence = FakeGeofenceService()
         let source = AppModel(inMemory: true, geofence: sourceGeofence, notifications: FakeNotificationService())

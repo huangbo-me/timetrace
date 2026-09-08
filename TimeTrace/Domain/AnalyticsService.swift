@@ -58,13 +58,13 @@ enum PlaceSessionFilter: Equatable {
 protocol AnalyticsServicing {
     func dailySummaries(sessions: [ActivitySession], activityId: UUID?, interval: DateInterval,
                         calendar: Calendar) -> [DailyActivitySummary]
-    func placeSummaries(sessions: [ActivitySession], activityId: UUID, interval: DateInterval) -> [PlaceActivitySummary]
-    func periodSummary(sessions: [ActivitySession], activityId: UUID, interval: DateInterval,
+    func placeSummaries(sessions: [ActivitySession], activityId: UUID?, interval: DateInterval) -> [PlaceActivitySummary]
+    func periodSummary(sessions: [ActivitySession], activityId: UUID?, interval: DateInterval,
                        previous: DateInterval, placeFilter: PlaceSessionFilter,
                        calendar: Calendar) -> PeriodActivitySummary
-    func weeklySummary(sessions: [ActivitySession], activityId: UUID, containing date: Date,
+    func weeklySummary(sessions: [ActivitySession], activityId: UUID?, containing date: Date,
                        calendar: Calendar) -> PeriodActivitySummary
-    func monthlySummary(sessions: [ActivitySession], activityId: UUID, containing date: Date,
+    func monthlySummary(sessions: [ActivitySession], activityId: UUID?, containing date: Date,
                         calendar: Calendar) -> PeriodActivitySummary
 }
 
@@ -91,9 +91,9 @@ struct AnalyticsService: AnalyticsServicing {
         }
     }
 
-    func placeSummaries(sessions: [ActivitySession], activityId: UUID, interval: DateInterval) -> [PlaceActivitySummary] {
+    func placeSummaries(sessions: [ActivitySession], activityId: UUID?, interval: DateInterval) -> [PlaceActivitySummary] {
         let relevant = sessions.filter {
-            $0.deletedAt == nil && $0.activityId == activityId && interval.contains($0.startAt)
+            $0.deletedAt == nil && (activityId == nil || $0.activityId == activityId) && interval.contains($0.startAt)
         }
         return Dictionary(grouping: relevant, by: \.placeTriggerId)
             .map { placeTriggerId, values in
@@ -110,7 +110,7 @@ struct AnalyticsService: AnalyticsServicing {
             }
     }
 
-    func weeklySummary(sessions: [ActivitySession], activityId: UUID, containing date: Date,
+    func weeklySummary(sessions: [ActivitySession], activityId: UUID?, containing date: Date,
                        calendar: Calendar) -> PeriodActivitySummary {
         let current = weekInterval(containing: date, calendar: calendar)
         let previous = DateInterval(start: calendar.date(byAdding: .day, value: -7, to: current.start)!, end: current.start)
@@ -118,7 +118,7 @@ struct AnalyticsService: AnalyticsServicing {
                              previous: previous, placeFilter: .all, calendar: calendar)
     }
 
-    func monthlySummary(sessions: [ActivitySession], activityId: UUID, containing date: Date,
+    func monthlySummary(sessions: [ActivitySession], activityId: UUID?, containing date: Date,
                         calendar: Calendar) -> PeriodActivitySummary {
         let current = calendar.dateInterval(of: .month, for: date)!
         let previousDate = calendar.date(byAdding: .month, value: -1, to: current.start)!
@@ -127,7 +127,7 @@ struct AnalyticsService: AnalyticsServicing {
                              previous: previous, placeFilter: .all, calendar: calendar)
     }
 
-    func periodSummary(sessions: [ActivitySession], activityId: UUID, interval: DateInterval,
+    func periodSummary(sessions: [ActivitySession], activityId: UUID?, interval: DateInterval,
                        previous: DateInterval, placeFilter: PlaceSessionFilter = .all,
                        calendar: Calendar) -> PeriodActivitySummary {
         let selectedSessions = sessions.filter { placeFilter.includes($0) }

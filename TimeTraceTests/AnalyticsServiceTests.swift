@@ -144,7 +144,7 @@ final class AnalyticsServiceTests: XCTestCase {
                             endAt: date(day: 1, hour: 0).addingTimeInterval(place.placeType == .work ? 720 : 36360),
                             status: .completed)
         }
-        let summary = TodayWorkSummary(sessions: values, places: places, workActivityId: activityId)
+        let summary = TodayWorkSummary(sessions: values, places: places, workActivityIDs: [activityId])
         XCTAssertEqual(summary.duration(now: date(day: 1, hour: 12)), 720)
         XCTAssertEqual(summary.sessions.count, 1)
     }
@@ -164,14 +164,14 @@ final class AnalyticsServiceTests: XCTestCase {
             officeSession.status = active ? .active : .completed
             let daily = service.dailySummaries(sessions: [homeSession, officeSession], activityId: activityId,
                                                 interval: interval(day: 1, length: 1), calendar: calendar)[0]
-            let summary = TodayWorkSummary(sessions: daily.sessions, places: [home, office], workActivityId: activityId)
+            let summary = TodayWorkSummary(sessions: daily.sessions, places: [home, office], workActivityIDs: [activityId])
             XCTAssertEqual(summary.duration(now: now), 720)
             XCTAssertEqual(summary.firstArrivalTime, arrival)
             XCTAssertEqual(daily.sessions.count, 2, "时间线仍保留居家和公司记录")
         }
         homeSession.endAt = nil
         homeSession.status = .active
-        XCTAssertEqual(TodayWorkSummary(sessions: [homeSession], places: [home], workActivityId: activityId)
+        XCTAssertEqual(TodayWorkSummary(sessions: [homeSession], places: [home], workActivityIDs: [activityId])
             .duration(now: now), 0)
     }
 
@@ -185,9 +185,9 @@ final class AnalyticsServiceTests: XCTestCase {
         let deleted = session(day: 1, start: 10, end: 11)
         deleted.deletedAt = date(day: 1, hour: 12)
         let values = [manualWork, study, missingPlace, incomplete, deleted]
-        let summary = TodayWorkSummary(sessions: values, places: [], workActivityId: activityId)
+        let summary = TodayWorkSummary(sessions: values, places: [], workActivityIDs: [activityId])
         XCTAssertEqual(summary.duration(now: date(day: 1, hour: 12)), 3600)
-        XCTAssertTrue(TodayWorkSummary(sessions: values, places: [], workActivityId: nil).sessions.isEmpty)
+        XCTAssertTrue(TodayWorkSummary(sessions: values, places: [], workActivityIDs: []).sessions.isEmpty)
     }
 
     private func session(day: Int, start: Int, end: Int) -> ActivitySession {
