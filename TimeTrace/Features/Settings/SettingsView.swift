@@ -7,6 +7,7 @@ struct SettingsView: View {
     @EnvironmentObject private var store: SettingsFeatureStore
     @Environment(\.openURL) private var openURL
     @AppStorage("profileNickname") private var profileNickname = ""
+    @FocusState private var isNicknameFocused: Bool
     @State private var showingPlaces = false
 
     private var model: AppModel { store.application }
@@ -38,6 +39,9 @@ struct SettingsView: View {
                         }
                         Spacer()
                         TextField("未设置", text: $profileNickname)
+                            .focused($isNicknameFocused)
+                            .submitLabel(.done)
+                            .onSubmit { isNicknameFocused = false }
                             .multilineTextAlignment(.trailing)
                             .frame(width: 128)
                             .onChange(of: profileNickname) { _, newValue in
@@ -161,7 +165,10 @@ struct SettingsView: View {
             .padding(.horizontal, 20)
             .padding(.top, 12)
             .padding(.bottom, 28)
+            .contentShape(Rectangle())
+            .onTapGesture { isNicknameFocused = false }
         }
+        .scrollDismissesKeyboard(.interactively)
         .timeTraceScreen()
         .timeTraceTabTitle("设置")
         .sheet(isPresented: $showingPlaces) { PlacesView() }
