@@ -185,7 +185,7 @@ struct TTLocationPermissionNotice: View {
             }
             .buttonStyle(.plain)
             .foregroundStyle(.orange)
-            .accessibilityHint("打开时迹的系统设置页面")
+            .accessibilityHint("打开时光落点的系统设置页面")
         }
     }
 }

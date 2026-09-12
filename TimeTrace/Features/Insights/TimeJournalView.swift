@@ -98,7 +98,7 @@ struct JournalSharePreview: View {
         error = nil
         defer { rendering = false }
         do {
-            let url = FileManager.default.temporaryDirectory.appendingPathComponent("时迹手记-\(UUID().uuidString).png")
+            let url = FileManager.default.temporaryDirectory.appendingPathComponent("时光落点手记-\(UUID().uuidString).png")
             try JournalPosterRenderer.write(journal: journal, insightCopy: insightCopy, showPlaceName: showPlaceName, theme: design.theme, to: url)
             generatedFiles.append(url)
             shareFile = JournalShareFile(url: url)
@@ -159,7 +159,7 @@ struct JournalPoster: View {
                     HStack(spacing: 8) {
                         TimeTraceMark(size: 32)
                         VStack(alignment: .leading, spacing: 2) {
-                            Text("时迹").font(.system(size: 19, weight: .semibold))
+                            Text("时光落点").font(.system(size: 19, weight: .semibold))
                             Text("TimeTrace").font(.system(size: 10, weight: .medium))
                         }
                         .foregroundStyle(design.ink)
@@ -179,7 +179,7 @@ struct JournalPoster: View {
                             .interpolation(.none)
                             .resizable()
                             .frame(width: 84, height: 84)
-                            .accessibilityLabel("时迹 App Store 下载二维码")
+                            .accessibilityLabel("时光落点 App Store 下载二维码")
                     }
                     Text("扫码下载 · iPhone")
                         .font(.system(size: 9, weight: .medium))

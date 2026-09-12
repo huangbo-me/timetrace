@@ -87,7 +87,7 @@ private struct InitialCloudRestoreDecisionView: View {
             VStack(spacing: 8) {
                 Text("恢复已有数据？")
                     .font(.title2.weight(.bold))
-                Text("已接入 iCloud。你可以恢复已有的时迹数据，也可以开启新记录。")
+                Text("已接入 iCloud。你可以恢复已有的时光落点数据，也可以开启新记录。")
                     .font(.subheadline)
                     .foregroundStyle(design.muted)
                     .multilineTextAlignment(.center)

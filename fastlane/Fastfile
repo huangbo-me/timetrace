@@ -1,0 +1,123 @@
+require 'json'
+require_relative 'release_version'
+
+def apple_versions
+  app = Spaceship::ConnectAPI::App.find(ENV.fetch('RELEASE_BUNDLE_ID', 'com.chronora.time.trace'))
+  UI.user_error!('App Store Connect 未找到应用') unless app
+  app.get_app_store_versions(filter: { platform: 'IOS' }).map do |version|
+    { version: version.version_string, state: version.app_version_state || version.app_store_state }
+  end
+end
+
+def release_context
+  directory = ENV.fetch('RELEASE_DIR')
+  state = JSON.parse(File.read(File.join(directory, 'state.json')))
+  key = app_store_connect_api_key(
+    key_id: ENV.fetch('ASC_KEY_ID'), issuer_id: ENV.fetch('ASC_ISSUER_ID'),
+    key_filepath: ENV.fetch('ASC_KEY_FILE'), duration: 1200, in_house: false
+  )
+  selected = ReleaseVersion.resolve(state.fetch('version'), apple_versions)
+  UI.user_error!("Apple 版本状态已变化，应改用 #{selected[:version]}；重新 notes / archive") unless selected[:version] == state.fetch('version')
+  [directory, state, key]
+end
+
+def store_options(directory, state, key)
+  # 使用空 metadata 目录，只更新显式传入的中文更新说明，不读取旧商店资料模板。
+  empty = File.join(directory, 'empty-metadata')
+  Dir.mkdir(empty) unless Dir.exist?(empty)
+  {
+    api_key: key, app_identifier: ENV.fetch('RELEASE_BUNDLE_ID', 'com.chronora.time.trace'), platform: 'ios',
+    app_version: state.fetch('version'), build_number: state.fetch('build'),
+    skip_binary_upload: true, skip_screenshots: true, metadata_path: empty,
+    release_notes: { ENV.fetch('RELEASE_LOCALE', 'zh-Hans') => File.read(File.join(directory, 'release-notes.txt')).strip },
+    force: true, automatic_release: false, precheck_include_in_app_purchases: false
+  }
+end
+
+default_platform(:ios)
+platform :ios do
+  desc '只读核对当前构建是否已上传或已提交审核'
+  lane :release_remote_status do
+    directory = ENV.fetch('RELEASE_DIR')
+    state = JSON.parse(File.read(File.join(directory, 'state.json')))
+    app_store_connect_api_key(key_id: ENV.fetch('ASC_KEY_ID'), issuer_id: ENV.fetch('ASC_ISSUER_ID'),
+                             key_filepath: ENV.fetch('ASC_KEY_FILE'), duration: 1200, in_house: false)
+    app = Spaceship::ConnectAPI::App.find(ENV.fetch('RELEASE_BUNDLE_ID', 'com.chronora.time.trace'))
+    UI.user_error!('未找到应用') unless app
+    build = Spaceship::ConnectAPI::Build.all(app_id: app.id, version: state.fetch('version'),
+      build_number: state.fetch('build'), platform: 'IOS').first
+    version = app.get_app_store_versions(filter: { platform: 'IOS', versionString: state.fetch('version') }).first
+    submitted = false
+    if version && %w[WAITING_FOR_REVIEW IN_REVIEW PENDING_APPLE_RELEASE PENDING_DEVELOPER_RELEASE READY_FOR_DISTRIBUTION].include?(version.app_version_state)
+      selected = version.get_build
+      submitted = build && selected && selected.id == build.id
+    end
+    File.write(File.join(directory, 'remote-status.json'), JSON.pretty_generate(
+      exists: !build.nil?, processing: build && build.processing_state, submitted: !!submitted
+    ))
+  end
+
+  desc '只读查询 Apple 当前版本，已上架则升级补丁号'
+  lane :release_resolve do
+    app_store_connect_api_key(
+      key_id: ENV.fetch('ASC_KEY_ID'), issuer_id: ENV.fetch('ASC_ISSUER_ID'),
+      key_filepath: ENV.fetch('ASC_KEY_FILE'), duration: 1200, in_house: false
+    )
+    result = ReleaseVersion.resolve(ENV.fetch('RELEASE_CANDIDATE'), apple_versions)
+    File.write(ENV.fetch('RELEASE_VERSION_RESULT'), JSON.pretty_generate(result))
+  end
+
+  desc '归档前重新核对 Apple 版本状态'
+  lane :release_check do
+    release_context
+  end
+
+  desc '上传指定 IPA，等待处理成功并填写 TestFlight 测试内容'
+  lane :release_upload do
+    directory, state, key = release_context
+    if ENV['RELEASE_ADOPT_UPLOAD'] == '1'
+      app = Spaceship::ConnectAPI::App.find(ENV.fetch('RELEASE_BUNDLE_ID', 'com.chronora.time.trace'))
+      UI.user_error!('App Store Connect 未找到应用') unless app
+      FastlaneCore::BuildWatcher.wait_for_build_processing_to_be_complete(
+        app_id: app.id, platform: 'IOS', app_version: state.fetch('version'),
+        build_version: state.fetch('build'), poll_interval: 30, timeout_duration: 3600,
+        return_when_build_appears: false
+      )
+    end
+    upload_to_testflight(
+      api_key: key, app_identifier: ENV.fetch('RELEASE_BUNDLE_ID', 'com.chronora.time.trace'),
+      ipa: state.fetch('ipa'), app_version: state.fetch('version'), build_number: state.fetch('build'),
+      changelog: File.read(File.join(directory, 'release-notes.txt')).strip,
+      skip_submission: true, skip_waiting_for_build_processing: false,
+      wait_processing_timeout_duration: 3600,
+      distribute_external: false,
+      distribute_only: ENV['RELEASE_ADOPT_UPLOAD'] == '1'
+    )
+  end
+
+  desc '填写 App Store 中文更新说明并关联确切构建，不提交审核'
+  lane :release_metadata do
+    directory, state, key = release_context
+    upload_to_app_store(**store_options(directory, state, key).merge(submit_for_review: false))
+    app = Spaceship::ConnectAPI::App.find(ENV.fetch('RELEASE_BUNDLE_ID', 'com.chronora.time.trace'))
+    version = app.get_app_store_versions(filter: { platform: 'IOS', versionString: state.fetch('version') }).first
+    build = Spaceship::ConnectAPI::Build.all(
+      app_id: app.id, version: state.fetch('version'), build_number: state.fetch('build'), platform: 'IOS'
+    ).first
+    UI.user_error!('未找到已处理成功的确切构建') unless build && build.processing_state == 'VALID'
+    UI.user_error!('未找到目标商店版本') unless version
+    version.select_build(build_id: build.id)
+    UI.user_error!('构建关联校验失败') unless version.get_build.id == build.id
+  end
+
+  desc '提交指定版本和构建审核，通过后手动发布'
+  lane :release_submit do
+    directory, state, key = release_context
+    upload_to_app_store(**store_options(directory, state, key).merge(
+      submit_for_review: true, skip_metadata: true
+    ))
+    current = apple_versions.find { |v| v[:version] == state.fetch('version') }
+    accepted = %w[WAITING_FOR_REVIEW IN_REVIEW PENDING_APPLE_RELEASE PENDING_DEVELOPER_RELEASE READY_FOR_DISTRIBUTION]
+    UI.user_error!('Apple 尚未确认进入审核队列；请先核实线上状态，不要直接重试') unless current && accepted.include?(current[:state])
+  end
+end

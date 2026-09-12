@@ -4,3 +4,14 @@ build/
 xcuserdata/
 .DS_Store
 DeviceBackups/
+
+# 发布凭据与 fastlane 本地产物
+.bundle/
+.env.release
+AuthKey_*.p8
+fastlane/report.xml
+fastlane/README.md
+fastlane/Preview.html
+
+# 本机 App Store 配置、私钥与发布进度（禁止提交）
+/appstoreConfig/

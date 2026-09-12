@@ -144,11 +144,11 @@ struct DataBackupView: View {
         .alert("开启 iCloud 同步", isPresented: $showingICloudHelp) {
             Button("知道了", role: .cancel) {}
         } message: {
-            Text("请前往“设置”> 您的姓名 > iCloud > 已存储到 iCloud，找到“时迹”并开启同步。开启后请完全退出并重新打开时迹，应用才会重新检查现有数据库的 iCloud 配置。")
+            Text("请前往“设置”> 您的姓名 > iCloud > 已存储到 iCloud，找到“时光落点”并开启同步。开启后请完全退出并重新打开时光落点，应用才会重新检查现有数据库的 iCloud 配置。")
         }
 
         .fileExporter(isPresented: $exporting, document: document, contentType: .data,
-                      defaultFilename: "时迹备份-\(Date().formatted(.iso8601.year().month().day())).timetrace") { result in
+                      defaultFilename: "时光落点备份-\(Date().formatted(.iso8601.year().month().day())).timetrace") { result in
             document = nil
             switch result {
             case .success:

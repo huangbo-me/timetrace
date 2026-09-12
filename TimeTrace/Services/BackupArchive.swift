@@ -7,7 +7,7 @@ enum BackupError: LocalizedError {
 
     var errorDescription: String? {
         switch self {
-        case .unsupportedVersion: "备份版本暂不支持，请更新时迹后重试。"
+        case .unsupportedVersion: "备份版本暂不支持，请更新时光落点后重试。"
         case .invalidFile: "无法读取此备份，文件格式不正确或已损坏。"
         case .wrongPassword: "密码不正确，或备份文件已损坏。"
         case .encryptionFailed: "无法加密备份，请重试。"

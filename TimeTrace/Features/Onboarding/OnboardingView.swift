@@ -34,7 +34,7 @@ struct OnboardingView: View {
                     HStack(spacing: 14) {
                         TimeTraceMark(size: 54)
                         VStack(alignment: .leading, spacing: 3) {
-                            Text("时迹").font(.title2.weight(.bold))
+                            Text("时光落点").font(.title2.weight(.bold))
                             Text("让工作时间，自动留下痕迹").font(.subheadline).foregroundStyle(design.muted)
                         }
                     }

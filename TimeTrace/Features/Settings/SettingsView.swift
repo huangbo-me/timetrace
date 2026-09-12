@@ -73,7 +73,7 @@ struct SettingsView: View {
                 HStack(spacing: 12) {
                     TimeTraceMark(size: 48)
                     VStack(alignment: .leading, spacing: 2) {
-                        Text("时迹").font(.title2.weight(.bold))
+                        Text("时光落点").font(.title2.weight(.bold))
                         Text("TimeTrace · 记录每一段专注时光").font(.caption).foregroundStyle(design.muted)
                     }
                 }
@@ -308,7 +308,7 @@ struct SettingsView: View {
                         HStack(spacing: 12) {
                             TTIcon(systemName: "info.circle.fill", tint: design.blue, size: 36)
                             VStack(alignment: .leading, spacing: 3) {
-                                Text("关于时迹").font(.subheadline.weight(.medium)).foregroundStyle(design.ink)
+                                Text("关于时光落点").font(.subheadline.weight(.medium)).foregroundStyle(design.ink)
                                 Text("版本 \(AppVersionInfo.version)").font(.caption).foregroundStyle(design.muted)
                             }
                             Spacer()
@@ -422,7 +422,7 @@ struct SettingsView: View {
 private enum AppVersionInfo {
     static let version = Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String ?? "未知"
     static let build = Bundle.main.object(forInfoDictionaryKey: "CFBundleVersion") as? String ?? "未知"
-    static let description = "时迹 TimeTrace · 版本 \(version)（构建 \(build)）"
+    static let description = "时光落点 TimeTrace · 版本 \(version)（构建 \(build)）"
 }
 
 private struct AboutView: View {
@@ -436,7 +436,7 @@ private struct AboutView: View {
             VStack(alignment: .leading, spacing: 18) {
                 VStack(spacing: 12) {
                     TimeTraceMark(size: 80)
-                    Text("时迹 TimeTrace").font(.title2.weight(.bold))
+                    Text("时光落点 TimeTrace").font(.title2.weight(.bold))
                     Text("看见时间，留住生活的足迹。")
                         .font(.subheadline).foregroundStyle(design.muted)
                 }
@@ -446,7 +446,7 @@ private struct AboutView: View {
 
                 TTSectionTitle(title: "应用介绍")
                 TTCard {
-                    Text("时迹帮助你记录在已设置地点停留的时间，通过历史记录、统计和时间手记，回顾每天的时间去向。")
+                    Text("时光落点帮助你记录在已设置地点停留的时间，通过历史记录、统计和时间手记，回顾每天的时间去向。")
                         .font(.subheadline).foregroundStyle(design.muted)
                         .frame(maxWidth: .infinity, alignment: .leading)
                 }
@@ -504,7 +504,7 @@ private struct AboutView: View {
             .padding(.bottom, 28)
         }
         .timeTraceScreen()
-        .navigationTitle("关于时迹")
+        .navigationTitle("关于时光落点")
         .navigationBarTitleDisplayMode(.inline)
         .alert("已复制版本信息", isPresented: $showingCopyConfirmation) {
             Button("好", role: .cancel) {}

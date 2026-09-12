@@ -26,8 +26,8 @@ enum ICloudSyncStatus: Equatable {
         switch self {
         case .checking: "正在确认此设备的同步状态…"
         case .enabled: "地点、围栏设置和记录会自动同步到您的私有 iCloud 数据库"
-        case .notEnabled: "请确认系统 iCloud 设置，并重新启动时迹以重新检查存储配置"
-        case .signedOut: "请登录 iCloud 后重新打开时迹以启用同步"
+        case .notEnabled: "请确认系统 iCloud 设置，并重新启动时光落点以重新检查存储配置"
+        case .signedOut: "请登录 iCloud 后重新打开时光落点以启用同步"
         case .restricted: "请检查屏幕使用时间或设备管理限制"
         case .unavailable: "暂时使用本机存储，可稍后重新检查"
         }
