@@ -16,6 +16,10 @@ struct TodayHeroCopy: Equatable {
 /// A timeline row belongs to the place that created its session, rather than
 /// to whichever workplace happened to be created first.
 enum TodayPlacePresentation {
+    static func systemImage(for session: ActivitySession, places: [ActivityTrigger]) -> String {
+        places.first { $0.id == session.placeTriggerId }?.placeType.systemImage ?? "location.fill"
+    }
+
     static func name(for session: ActivitySession, places: [ActivityTrigger]) -> String {
         guard let placeTriggerId = session.placeTriggerId,
               let place = places.first(where: { $0.id == placeTriggerId }) else {
@@ -88,28 +92,70 @@ struct TodayWorkSummary {
     }
 }
 
+/// The hero's displayed total follows the currently active place category.
+struct TodayHeroSummary {
+    let activeSession: ActivitySession?
+    let activePlace: ActivityTrigger?
+    let sessions: [ActivitySession]
+    let duration: TimeInterval
+    let firstArrivalTime: Date?
+    var label: String { "今日累计\(activePlace?.placeType.displayName ?? "工作")时长" }
+    var systemImage: String { activePlace?.placeType.systemImage ?? "location.fill" }
+
+    init(sessions: [ActivitySession], places: [ActivityTrigger], workActivityIDs: Set<UUID>,
+         now: Date, calendar: Calendar = .current) {
+        let currentSession = sessions.filter {
+            $0.deletedAt == nil && $0.status == .active && $0.endAt == nil &&
+            $0.startAt <= now && workActivityIDs.contains($0.activityId)
+        }.max { $0.startAt < $1.startAt }
+        activeSession = currentSession
+        activePlace = places.first { $0.id == currentSession?.placeTriggerId }
+        let selectedType = activePlace?.placeType ?? .work
+        let dayStart = calendar.startOfDay(for: now)
+        let selectedSessions = sessions.filter { session in
+            guard session.deletedAt == nil, workActivityIDs.contains(session.activityId),
+                  session.startAt <= now,
+                  (session.endAt ?? (session.status == .active ? now : session.startAt)) > dayStart else {
+                return false
+            }
+            guard let placeId = session.placeTriggerId else { return selectedType == .work }
+            return places.first { $0.id == placeId }?.placeType == selectedType
+        }
+        self.sessions = selectedSessions
+        duration = selectedSessions.reduce(0) { total, session in
+            guard let end = session.endAt ?? (session.status == .active ? now : nil) else { return total }
+            return total + max(0, min(end, now).timeIntervalSince(max(session.startAt, dayStart)))
+        }
+        firstArrivalTime = selectedSessions.map(\.startAt).min()
+    }
+}
+
 struct TodayView: View {
+    @Environment(\.timeTraceDesign) private var design
+
     @EnvironmentObject private var store: TodayFeatureStore
+    @Environment(\.scenePhase) private var scenePhase
     @AppStorage("profileNickname") private var profileNickname = ""
 
     private var model: AppModel { store.application }
 
     var body: some View {
-        TimelineView(.periodic(from: .now, by: 60)) { timeline in
+        TimelineView(.periodic(from: .now, by: scenePhase == .active && model.workSessions.contains(where: { $0.status == .active }) ? 1 : 60)) { timeline in
+            let summary = todaySummary(now: timeline.date)
             ScrollView(showsIndicators: false) {
                 VStack(alignment: .leading, spacing: 20) {
                     header
                     TTLocationPermissionNotice(status: model.locationAuthorizationStatus)
-                    hero(summary: todaySummary, now: timeline.date)
-                    if let summary = todaySummary {
+                    hero(summary: summary, now: timeline.date)
+                    if let summary {
                         TTSectionTitle(title: "今日时间线")
                         TTCard {
                             VStack(spacing: 0) {
                                 ForEach(Array(summary.sessions.enumerated()), id: \.element.id) { index, session in
                                     TodaySessionRow(
                                         session: session,
-                                        now: timeline.date,
-                                        placeName: TodayPlacePresentation.name(for: session, places: model.triggers)
+                                        placeName: TodayPlacePresentation.name(for: session, places: model.triggers),
+                                        systemImage: TodayPlacePresentation.systemImage(for: session, places: model.triggers)
                                     )
                                     if index < summary.sessions.count - 1 { Divider().padding(.leading, 50) }
                                 }
@@ -140,30 +186,28 @@ struct TodayView: View {
                         .font(.title2.weight(.bold))
                     Text(TimeTraceFormat.day.string(from: Date()))
                         .font(.subheadline)
-                        .foregroundStyle(TimeTraceDesign.muted)
+                        .foregroundStyle(design.muted)
                 }
                 Spacer()
-                Image(systemName: "calendar")
-                    .font(.headline)
-                    .foregroundStyle(TimeTraceDesign.blue)
+                TodayRecordingPulse(isActive: model.workSessions.contains { $0.status == .active })
                     .frame(width: 38, height: 38)
-                    .background(TimeTraceDesign.card, in: Circle())
+                    .background(design.card, in: Circle())
             }
         }
     }
 
     @ViewBuilder private func hero(summary: DailyActivitySummary?, now: Date) -> some View {
-        let activeSession = summary?.sessions.first(where: { $0.status == .active })
+        let heroSummary = TodayHeroSummary(sessions: model.workSessions, places: model.triggers,
+                                          workActivityIDs: model.workActivityIDs, now: now)
+        let activeSession = heroSummary.activeSession
         let active = activeSession != nil
-        let activePlace = activeSession.flatMap { session in
-            session.placeTriggerId.flatMap { id in model.triggers.first { $0.id == id } }
-        }
+        let activePlace = heroSummary.activePlace
         let activePlaceType = activePlace?.placeType
         let dayStatus = ChinaWorkCalendar.status(for: now)
         let workSummary = TodayWorkSummary(sessions: summary?.sessions ?? [], places: model.triggers,
                                            workActivityIDs: model.workActivityIDs)
-        let hasRecordedWork = !workSummary.sessions.isEmpty
-        let hasRecordedActivity = !(summary?.sessions.isEmpty ?? true)
+        let hasRecordedWork = !workSummary.sessions.isEmpty || (activePlaceType == nil && !heroSummary.sessions.isEmpty)
+        let hasRecordedActivity = !(summary?.sessions.isEmpty ?? true) || !heroSummary.sessions.isEmpty
         let mode = TodayWorkdayRule.mode(
             isWorkday: dayStatus.isWorkday,
             activePlaceType: activePlaceType,
@@ -176,7 +220,7 @@ struct TodayView: View {
                                          activityName: activityName, workdayLabel: dayStatus.label)
         VStack(alignment: .leading, spacing: 18) {
             HStack(spacing: 12) {
-                TTIcon(systemName: active ? "building.2.fill" : "location.fill", tint: .white, size: 48)
+                TTIcon(systemName: heroSummary.systemImage, tint: .white, size: 48)
                     .background(.white.opacity(0.18), in: RoundedRectangle(cornerRadius: 14))
                 VStack(alignment: .leading, spacing: 3) {
                     Text(copy.title)
@@ -187,13 +231,24 @@ struct TodayView: View {
                 }
             }
             VStack(alignment: .leading, spacing: 4) {
-                Text(mode == .rest ? "今日安排" : "今日累计工作时长")
+                Text(mode == .rest ? "今日安排" : heroSummary.label)
                     .font(.caption).foregroundStyle(.white.opacity(0.8))
-                Text(summary.map { _ in TimeTraceFormat.duration(workSummary.duration(now: now)) } ?? (mode == .rest ? "尚无记录" : "尚未开始"))
-                    .font(.system(size: 29, weight: .bold, design: .rounded))
-                    .monospacedDigit()
-                if let arrival = workSummary.firstArrivalTime {
-                    Text("到达 \(TimeTraceFormat.time.string(from: arrival))")
+                if summary != nil || !heroSummary.sessions.isEmpty {
+                    heroDuration(heroSummary.duration)
+                        .font(.system(size: 46, weight: .bold, design: .rounded))
+                        .monospacedDigit()
+                        .lineLimit(1)
+                        .minimumScaleFactor(0.5)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                        .accessibilityLabel(heroSummary.label)
+                        .accessibilityValue(TimeTraceFormat.durationWithSeconds(heroSummary.duration))
+                } else {
+                    Text(mode == .rest ? "尚无记录" : "尚未开始")
+                        .font(.system(size: 29, weight: .bold, design: .rounded))
+                }
+                if let arrival = heroSummary.firstArrivalTime {
+                    Text(arrival < Calendar.current.startOfDay(for: now)
+                         ? "今日从 00:00 累计" : "到达 \(TimeTraceFormat.time.string(from: arrival))")
                         .font(.caption.weight(.medium)).foregroundStyle(.white.opacity(0.82))
                 }
             }
@@ -206,8 +261,20 @@ struct TodayView: View {
         .foregroundStyle(.white)
         .padding(20)
         .frame(maxWidth: .infinity, alignment: .leading)
-        .background(TimeTraceDesign.heroGradient, in: RoundedRectangle(cornerRadius: 22, style: .continuous))
-        .shadow(color: TimeTraceDesign.violet.opacity(0.22), radius: 16, y: 9)
+        .background(design.heroGradient, in: RoundedRectangle(cornerRadius: 22, style: .continuous))
+        .shadow(color: design.violet.opacity(0.22), radius: 16, y: 9)
+    }
+
+    private func heroDuration(_ duration: TimeInterval) -> Text {
+        let seconds = max(0, Int(duration))
+        let hours = String(format: "%02d", seconds / 3600)
+        let minutes = String(format: "%02d", seconds / 60 % 60)
+        let remainder = String(format: "%02d", seconds % 60)
+        let hourUnit = Text("时").font(.system(size: 16, weight: .medium)).foregroundColor(.white.opacity(0.75))
+        let minuteUnit = Text("分").font(.system(size: 16, weight: .medium)).foregroundColor(.white.opacity(0.75))
+        let secondUnit = Text("秒").font(.system(size: 16, weight: .medium)).foregroundColor(.white.opacity(0.75))
+        // A single Text scales all three values and their units together on narrow screens.
+        return Text("\(hours)\(hourUnit) \(minutes)\(minuteUnit) \(remainder)\(secondUnit)")
     }
 
     private var activeReminders: some View {
@@ -225,16 +292,17 @@ struct TodayView: View {
                         }
                         Spacer()
                         Button("完成") { model.finishReminderInstance(instance, abandoned: false) }
-                            .buttonStyle(.borderedProminent).tint(TimeTraceDesign.blue)
+                            .buttonStyle(.glassProminent)
+                            .foregroundStyle(design.onAccent).tint(design.blue)
                     }
                 }
             }
         }
     }
 
-    private var todaySummary: DailyActivitySummary? {
+    private func todaySummary(now: Date) -> DailyActivitySummary? {
         let calendar = Calendar.current
-        let start = calendar.startOfDay(for: Date())
+        let start = calendar.startOfDay(for: now)
         let end = calendar.date(byAdding: .day, value: 1, to: start)!
         return model.dailySummaries(interval: DateInterval(start: start, end: end)).first
     }
@@ -271,21 +339,65 @@ struct TodayView: View {
     }
 }
 
+private struct TodayRecordingPulse: View {
+    @Environment(\.timeTraceDesign) private var design
+
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    @Environment(\.scenePhase) private var scenePhase
+    let isActive: Bool
+
+    var body: some View {
+        Group {
+            if isActive && !reduceMotion && scenePhase == .active {
+                // One gentle beat followed by a rest; only this small indicator animates.
+                Circle()
+                    .fill(Color.mint)
+                    .frame(width: 8, height: 8)
+                    .keyframeAnimator(initialValue: 0.0, repeating: true) { content, pulse in
+                        content
+                            .scaleEffect(1 + 0.16 * pulse)
+                            .background {
+                                Circle()
+                                    .fill(Color.mint.opacity(0.08 + 0.08 * pulse))
+                                    .frame(width: 16, height: 16)
+                                    .scaleEffect(1 + 0.12 * pulse)
+                            }
+                    } keyframes: { _ in
+                        CubicKeyframe(1.0, duration: 0.16)
+                        CubicKeyframe(0.0, duration: 0.24)
+                        LinearKeyframe(0.0, duration: 0.60)
+                    }
+            } else {
+                Circle()
+                    .fill(isActive ? Color.mint : design.muted.opacity(0.5))
+                    .frame(width: 8, height: 8)
+            }
+        }
+        .frame(width: 20, height: 20)
+        .accessibilityElement(children: .ignore)
+        .accessibilityLabel(isActive ? "正在记录时间" : "当前没有进行中的记录")
+    }
+}
+
 private struct TodaySessionRow: View {
+    @Environment(\.timeTraceDesign) private var design
+
     let session: ActivitySession
-    let now: Date
     let placeName: String
+    let systemImage: String
     var body: some View {
         HStack(spacing: 12) {
-            TTIcon(systemName: "building.2.fill", size: 38)
+            TTIcon(systemName: systemImage, size: 38)
             VStack(alignment: .leading, spacing: 4) {
                 Text(placeName).font(.subheadline.weight(.semibold))
-                Text("\(TimeTraceFormat.time.string(from: session.startAt)) · \(session.endAt.map { TimeTraceFormat.time.string(from: $0) } ?? "进行中")")
-                    .font(.caption).foregroundStyle(TimeTraceDesign.muted)
+                Text(session.endAt.map { "\(TimeTraceFormat.time.string(from: session.startAt)) · \(TimeTraceFormat.time.string(from: $0))" }
+                     ?? "开始于 \(TimeTraceFormat.time.string(from: session.startAt))")
+                    .font(.caption).foregroundStyle(design.muted)
             }
             Spacer()
-            Text(TimeTraceFormat.duration(session.duration ?? max(0, now.timeIntervalSince(session.startAt))))
-                .font(.subheadline.weight(.bold)).foregroundStyle(session.status == .active ? .green : TimeTraceDesign.ink)
+            Text(session.status == .active ? "记录中" : session.duration.map(TimeTraceFormat.duration) ?? "未检测到离开")
+                .font(.subheadline.weight(.bold)).foregroundStyle(session.status == .active ? .green : design.ink)
+                .monospacedDigit()
         }
         .padding(.vertical, 5)
     }

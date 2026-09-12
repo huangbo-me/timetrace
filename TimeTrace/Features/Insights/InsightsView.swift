@@ -2,76 +2,74 @@ import Charts
 import SwiftUI
 
 struct InsightsView: View {
+    @Environment(\.timeTraceDesign) private var design
+
     @EnvironmentObject private var store: InsightsFeatureStore
+    @Environment(\.scenePhase) private var scenePhase
+    @State private var summaryNow = Date()
     @State private var range = InsightRange.thisWeek
     @State private var customStart = Calendar.current.date(byAdding: .day, value: -6, to: Date()) ?? Date()
     @State private var customEnd = Date()
     @State private var trendMetric = TrendMetric.workDuration
-    @State private var trendPlaceFilter: PlaceSessionFilter = .all
+    @State private var selectedType: PlaceType?
+
+    @State private var shareJournal: TimeJournal?
+    @State private var shareCopy: PeriodInsightCopy?
+    @State private var showingCustomDates = false
+    @State private var selectedFinding: JournalFinding?
 
     private var model: AppModel { store.application }
 
     var body: some View {
+        let journal = store.journal(interval: intervals.current, previous: intervals.previous,
+                                    filter: trendPlaceFilter, calendar: workCalendar, now: summaryNow)
+        let careInput = InsightSummaryRequest.make(sessions: model.workSessions, places: model.workTriggers,
+            calendar: workCalendar, now: summaryNow, additional: [])
+        let insight = store.dailySummary.insight(journal: journal, type: selectedType, now: summaryNow)
         ScrollView(showsIndicators: false) {
             VStack(alignment: .leading, spacing: 18) {
-                VStack(alignment: .leading, spacing: 3) {
-                    Text(rangeDescription).font(.subheadline).foregroundStyle(TimeTraceDesign.muted)
-                }
-
-                ScrollView(.horizontal, showsIndicators: false) {
-                    HStack(spacing: 9) {
-                        ForEach(InsightRange.allCases) { value in
-                            Button {
-                                withAnimation(.easeInOut(duration: 0.18)) { range = value }
-                            } label: {
-                                Text(value.title)
-                                    .font(.subheadline.weight(.semibold))
-                                    .foregroundStyle(range == value ? .white : TimeTraceDesign.ink)
-                                    .lineLimit(1)
-                                    .padding(.horizontal, 15)
-                                    .padding(.vertical, 10)
-                                    .background(
-                                        range == value ? TimeTraceDesign.violet : TimeTraceDesign.card,
-                                        in: Capsule()
-                                    )
-                                    .overlay {
-                                        Capsule().stroke(
-                                            range == value ? .clear : TimeTraceDesign.border,
-                                            lineWidth: 1
-                                        )
-                                    }
-                            }
-                            .buttonStyle(.plain)
+                DailyCareCard(text: store.dailySummary.tip(for: careInput))
+                HStack(spacing: 8) {
+                    filterBar
+                    if journal.canShare {
+                        Button {
+                            shareCopy = insight
+                            shareJournal = journal
+                        } label: {
+                            Image(systemName: "square.and.arrow.up")
+                                .font(.body.weight(.medium))
+                                .frame(width: 44, height: 44)
                         }
+                        .buttonStyle(.plain)
+                        .foregroundStyle(design.violet)
+                        .accessibilityLabel("分享当前手记")
                     }
-                    .padding(.horizontal, 1)
                 }
 
-                if range == .custom {
-                    TTCard {
-                        VStack(spacing: 10) {
-                            DatePicker("开始日期", selection: $customStart, in: ...customEnd, displayedComponents: .date)
-                            DatePicker("结束日期", selection: $customEnd, in: customStart..., displayedComponents: .date)
+                PeriodInsightCard(journal: journal, copy: insight) {
+                    selectedFinding = journal.mainFinding
+                }
+
+                VStack(alignment: .leading, spacing: 8) {
+                    if insight != nil, let cutoff = store.dailySummary.dataAsOf {
+                        Text("洞见文案 · 截至 \(summaryCutoff(cutoff))")
+                            .font(.caption2).foregroundStyle(design.muted)
+                    } else if store.dailySummary.isLoading {
+                        Label("正在写下今天的手记…", systemImage: "sparkles")
+                            .font(.caption2).foregroundStyle(design.muted)
+                    } else if let message = store.dailySummary.message {
+                        Text(message).font(.caption2).foregroundStyle(design.muted)
+                        if store.dailySummary.canRetry {
+                            Button("重试智能手记") { loadSummary(retry: true) }
+                                .font(.caption.weight(.medium))
                         }
                     }
                 }
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .padding(.horizontal, 4)
 
                 if let summary {
-                    overview(trendPlaceFilter == .all ? summary : trendSummary)
-                    placeBreakdown
-                    HStack {
-                        TTSectionTitle(title: trendTitle)
-                        Spacer()
-                        if trendPlaceFilter != .all {
-                            Button("全部地点") {
-                                withAnimation(.easeInOut(duration: 0.18)) {
-                                    trendPlaceFilter = .all
-                                }
-                            }
-                            .font(.subheadline.weight(.semibold))
-                            .foregroundStyle(TimeTraceDesign.violet)
-                        }
-                    }
+                    TTSectionTitle(title: trendTitle)
                     TTCard {
                         VStack(alignment: .leading, spacing: 14) {
                             Picker("趋势指标", selection: $trendMetric) {
@@ -98,6 +96,8 @@ struct InsightsView: View {
                         }
                     }
 
+                    TTSectionTitle(title: "详细统计")
+                    overview(trendPlaceFilter == .all ? summary : trendSummary)
                     TTSectionTitle(title: insightPresentation.summaryTitle)
                     TTCard {
                         VStack(spacing: 14) {
@@ -119,6 +119,54 @@ struct InsightsView: View {
         }
         .timeTraceScreen()
         .timeTraceTabTitle("统计")
+        .task(id: summaryTaskID) { loadSummary() }
+        .onChange(of: careInput.recentSourceID) { _, _ in loadSummary() }
+        .onChange(of: scenePhase) { _, phase in
+            if phase == .active { summaryNow = Date(); loadSummary() }
+        }
+        .onReceive(Timer.publish(every: 60, on: .main, in: .common).autoconnect()) { date in
+            guard scenePhase == .active else { return }
+            summaryNow = date
+        }
+        .sheet(item: $shareJournal) { journal in JournalSharePreview(journal: journal, insightCopy: shareCopy) }
+        .sheet(isPresented: $showingCustomDates) {
+            NavigationStack {
+                Form {
+                    DatePicker("开始日期", selection: $customStart, in: ...customEnd, displayedComponents: .date)
+                    DatePicker("结束日期", selection: $customEnd, in: customStart..., displayedComponents: .date)
+                }
+                .scrollContentBackground(.hidden)
+                .timeTraceScreen()
+                .navigationTitle("自定义时间")
+                .navigationBarTitleDisplayMode(.inline)
+                .toolbar {
+                    ToolbarItem(placement: .confirmationAction) {
+                        Button("完成") { range = .custom; showingCustomDates = false }
+                    }
+                }
+            }
+            .presentationDetents([.medium])
+        }
+        .sheet(item: $selectedFinding) { finding in JournalFindingDetail(finding: finding, calendar: workCalendar) }
+    }
+
+    private var summaryTaskID: String {
+        "\(InsightSummaryRequest.dateString(summaryNow, calendar: workCalendar))-\(model.isLoaded)-\(model.isOnboarded)-\(model.isRestoringICloudData)-\(model.needsInitialCloudRestoreDecision)-\(store.dailySummary.identityRevision)-\(store.dailySummary.isLoading)-\(workCalendar.timeZone.identifier)"
+    }
+
+    private func loadSummary(retry: Bool = false) {
+        guard scenePhase == .active else { return }
+        let additional = range.summaryRanges(calendar: workCalendar, now: summaryNow,
+            customStart: customStart, customEnd: customEnd)
+        store.loadDailySummary(calendar: workCalendar, now: summaryNow, additional: additional, retry: retry)
+    }
+
+    private func summaryCutoff(_ date: Date) -> String {
+        let formatter = DateFormatter()
+        formatter.locale = TimeTraceLocalization.locale
+        formatter.timeZone = workCalendar.timeZone
+        formatter.dateFormat = "M月d日 HH:mm"
+        return formatter.string(from: date)
     }
 
     private func overview(_ summary: PeriodActivitySummary) -> some View {
@@ -136,74 +184,79 @@ struct InsightsView: View {
         let average = insightPresentation.averageBySession
             ? averageSessionDuration(in: summary)
             : summary.averageWorkDuration
-        StatTile(title: insightPresentation.periodTotalTitle, value: TimeTraceFormat.duration(summary.totalWorkDuration), icon: "clock.fill", tint: TimeTraceDesign.blue)
+        StatTile(title: insightPresentation.periodTotalTitle, value: TimeTraceFormat.duration(summary.totalWorkDuration), icon: "clock.fill", tint: design.blue)
             .frame(minWidth: 164)
-        StatTile(title: insightPresentation.averageTitle, value: average.map(TimeTraceFormat.duration) ?? "—", icon: "calendar", tint: TimeTraceDesign.violet)
+        StatTile(title: insightPresentation.averageTitle, value: average.map(TimeTraceFormat.duration) ?? "—", icon: "calendar", tint: design.violet)
             .frame(minWidth: 164)
     }
 
     private func detailRow(_ title: String, _ value: String, icon: String, tint: Color) -> some View {
         HStack {
             TTIcon(systemName: icon, tint: tint, size: 34)
-            Text(title).font(.subheadline).foregroundStyle(TimeTraceDesign.muted)
+            Text(title).font(.subheadline).foregroundStyle(design.muted)
             Spacer()
             Text(value).font(.headline.weight(.bold)).monospacedDigit()
         }
     }
 
-    @ViewBuilder private var placeBreakdown: some View {
-        TTSectionTitle(title: "按地点")
-        TTCard {
-            if placeSummaries.isEmpty {
-                ContentUnavailableView("暂无地点统计", systemImage: "mappin.and.ellipse")
-            } else {
-                VStack(spacing: 12) {
-                    ForEach(Array(placeSummaries.enumerated()), id: \.element.id) { index, summary in
-                        Button {
-                            withAnimation(.easeInOut(duration: 0.18)) {
-                                trendPlaceFilter = .place(summary.placeTriggerId)
-                            }
-                        }
-                        label: {
-                            HStack(spacing: 12) {
-                                TTIcon(systemName: "mappin.and.ellipse", tint: TimeTraceDesign.blue, size: 36)
-                                VStack(alignment: .leading, spacing: 3) {
-                                    Text(placeName(for: summary)).font(.subheadline.weight(.semibold))
-                                    Text("\(summary.sessionCount) 次记录\(summary.incompleteSessionCount > 0 ? " · \(summary.incompleteSessionCount) 次未完成" : "")")
-                                        .font(.caption).foregroundStyle(TimeTraceDesign.muted)
-                                }
-                                Spacer()
-                                Text(TimeTraceFormat.duration(summary.totalDuration))
-                                    .font(.subheadline.weight(.bold)).monospacedDigit()
-                                Image(systemName: isSelected(summary) ? "checkmark.circle.fill" : "chevron.right")
-                                    .font(.subheadline.weight(.semibold))
-                                    .foregroundStyle(isSelected(summary) ? TimeTraceDesign.violet : TimeTraceDesign.muted)
-                            }
-                            .contentShape(Rectangle())
-                        }
-                        .buttonStyle(.plain)
-                        if index < placeSummaries.count - 1 { Divider() }
+    private var filterBar: some View {
+        HStack(spacing: 0) {
+            Menu {
+                ForEach(InsightRange.allCases) { value in
+                    Button {
+                        if value == .custom { showingCustomDates = true }
+                        else { range = value }
+                    } label: {
+                        if range == value { Label(value.title, systemImage: "checkmark") }
+                        else { Text(value.title) }
                     }
                 }
+            } label: {
+                filterLabel(range == .custom ? "自定义" : range.title, icon: "calendar")
             }
+            .accessibilityLabel("时间范围：\(range.title)")
+            .accessibilityIdentifier("insights-range-filter")
+
+            Rectangle().fill(design.border).frame(width: 1, height: 18)
+
+            Menu {
+                Picker("地点类型", selection: $selectedType) {
+                    Label("全部类型", systemImage: "square.grid.2x2").tag(nil as PlaceType?)
+                    ForEach(PlaceType.allCases) { type in
+                        Label(type.displayName, systemImage: type.systemImage).tag(Optional(type))
+                    }
+                }
+            } label: {
+                filterLabel(selectedType?.displayName ?? "全部类型",
+                            icon: selectedType?.systemImage ?? "square.grid.2x2")
+            }
+            .accessibilityLabel("地点类型：\(selectedType?.displayName ?? "全部类型")")
+            .accessibilityIdentifier("insights-type-filter")
         }
+        .buttonStyle(.plain)
+        .background(design.card, in: RoundedRectangle(cornerRadius: 16))
+        .overlay { RoundedRectangle(cornerRadius: 16).strokeBorder(design.border) }
     }
 
-    private var placeSummaries: [PlaceActivitySummary] {
-        model.placeSummaries(interval: intervals.current)
+    private func filterLabel(_ title: String, icon: String) -> some View {
+        HStack(spacing: 6) {
+            ViewThatFits(in: .horizontal) {
+                Label(title, systemImage: icon)
+                Text(title)
+            }
+            Image(systemName: "chevron.down").font(.caption2.weight(.semibold))
+                .foregroundStyle(design.muted)
+        }
+        .font(.subheadline.weight(.semibold))
+        .foregroundStyle(design.ink)
+        .frame(maxWidth: .infinity, minHeight: 44)
+        .padding(.horizontal, 10)
+        .contentShape(Rectangle())
     }
 
-    private func placeName(for summary: PlaceActivitySummary) -> String {
-        placeName(for: summary.placeTriggerId)
-    }
-
-    private func placeName(for triggerId: UUID?) -> String {
-        guard let triggerId else { return "未标记地点" }
-        return model.workTriggers.first { $0.id == triggerId }?.displayPlaceName ?? "已删除地点"
-    }
-
-    private func isSelected(_ summary: PlaceActivitySummary) -> Bool {
-        trendPlaceFilter == .place(summary.placeTriggerId)
+    private var trendPlaceFilter: PlaceSessionFilter {
+        guard let selectedType else { return .all }
+        return .forType(selectedType, places: model.workTriggers)
     }
 
     private var summary: PeriodActivitySummary? {
@@ -219,20 +272,11 @@ struct InsightsView: View {
     }
 
     private var trendTitle: String {
-        guard case .place(let triggerId) = trendPlaceFilter else { return "趋势" }
-        return "趋势 · \(placeName(for: triggerId))"
+        selectedType.map { "趋势 · \($0.displayName)" } ?? "趋势"
     }
 
     private var insightPresentation: PlaceInsightPresentation {
-        switch trendPlaceFilter {
-        case .all:
-            return PlaceInsightPresentation(type: nil)
-        case .place(let triggerId):
-            let type = triggerId.flatMap { id in
-                model.workTriggers.first { $0.id == id }?.placeType
-            }
-            return PlaceInsightPresentation(type: type)
-        }
+        PlaceInsightPresentation(type: selectedType)
     }
 
     private var placeSummaryMetrics: [PlaceSummaryMetric] {
@@ -248,55 +292,55 @@ struct InsightsView: View {
         case .work:
             return [
                 .init("平均到达", TimeTraceFormat.clockOffset(trendSummary.averageArrivalOffset), "sunrise.fill", .orange),
-                .init("平均离开", TimeTraceFormat.clockOffset(trendSummary.averageDepartureOffset), "sunset.fill", TimeTraceDesign.violet),
-                .init("最长工作日", trendSummary.longestWorkDay.map { TimeTraceFormat.duration($0.totalDuration) } ?? "—", "sparkles", TimeTraceDesign.blue)
+                .init("平均离开", TimeTraceFormat.clockOffset(trendSummary.averageDepartureOffset), "sunset.fill", design.violet),
+                .init("最长工作日", trendSummary.longestWorkDay.map { TimeTraceFormat.duration($0.totalDuration) } ?? "—", "sparkles", design.blue)
             ]
         case .study:
             return [
-                .init("学习天数", "\(trendSummary.days.count) 天", "calendar", TimeTraceDesign.violet),
-                .init("平均学习时长", trendSummary.averageWorkDuration.map(TimeTraceFormat.duration) ?? "—", "book.closed.fill", TimeTraceDesign.blue),
+                .init("学习天数", "\(trendSummary.days.count) 天", "calendar", design.violet),
+                .init("平均学习时长", trendSummary.averageWorkDuration.map(TimeTraceFormat.duration) ?? "—", "book.closed.fill", design.blue),
                 .init("最长学习日", trendSummary.longestWorkDay.map { TimeTraceFormat.duration($0.totalDuration) } ?? "—", "sparkles", .orange)
             ]
         case .exercise:
             return [
                 .init("运动次数", "\(sessions.count) 次", "figure.run", .orange),
-                .init("平均锻炼时长", averageStay.map(TimeTraceFormat.duration) ?? "—", "timer", TimeTraceDesign.violet),
-                .init("最长锻炼", longestStay.map(TimeTraceFormat.duration) ?? "—", "trophy.fill", TimeTraceDesign.blue)
+                .init("平均锻炼时长", averageStay.map(TimeTraceFormat.duration) ?? "—", "timer", design.violet),
+                .init("最长锻炼", longestStay.map(TimeTraceFormat.duration) ?? "—", "trophy.fill", design.blue)
             ]
         case .home:
             return [
-                .init("到访天数", "\(trendSummary.days.count) 天", "house.fill", TimeTraceDesign.violet),
-                .init("平均停留", averageStay.map(TimeTraceFormat.duration) ?? "—", "timer", TimeTraceDesign.blue),
+                .init("到访天数", "\(trendSummary.days.count) 天", "house.fill", design.violet),
+                .init("平均停留", averageStay.map(TimeTraceFormat.duration) ?? "—", "timer", design.blue),
                 .init("最长停留", longestStay.map(TimeTraceFormat.duration) ?? "—", "moon.stars.fill", .orange)
             ]
         case .dining:
             return [
                 .init("用餐次数", "\(sessions.count) 次", "fork.knife", .orange),
-                .init("平均用餐时长", averageStay.map(TimeTraceFormat.duration) ?? "—", "timer", TimeTraceDesign.violet),
-                .init("常用到店时间", TimeTraceFormat.clockOffset(trendSummary.averageArrivalOffset), "clock.fill", TimeTraceDesign.blue)
+                .init("平均用餐时长", averageStay.map(TimeTraceFormat.duration) ?? "—", "timer", design.violet),
+                .init("常用到店时间", TimeTraceFormat.clockOffset(trendSummary.averageArrivalOffset), "clock.fill", design.blue)
             ]
         case .shopping:
             return [
-                .init("购物次数", "\(sessions.count) 次", "bag.fill", TimeTraceDesign.violet),
-                .init("平均停留", averageStay.map(TimeTraceFormat.duration) ?? "—", "timer", TimeTraceDesign.blue),
+                .init("购物次数", "\(sessions.count) 次", "bag.fill", design.violet),
+                .init("平均停留", averageStay.map(TimeTraceFormat.duration) ?? "—", "timer", design.blue),
                 .init("最长停留", longestStay.map(TimeTraceFormat.duration) ?? "—", "sparkles", .orange)
             ]
         case .healthcare:
             return [
                 .init("就诊次数", "\(sessions.count) 次", "cross.case.fill", .red),
-                .init("平均就诊时长", averageStay.map(TimeTraceFormat.duration) ?? "—", "timer", TimeTraceDesign.violet),
-                .init("最近就诊", formattedVisitDate(recentVisit), "calendar", TimeTraceDesign.blue)
+                .init("平均就诊时长", averageStay.map(TimeTraceFormat.duration) ?? "—", "timer", design.violet),
+                .init("最近就诊", formattedVisitDate(recentVisit), "calendar", design.blue)
             ]
         case .leisure:
             return [
-                .init("休闲次数", "\(sessions.count) 次", "gamecontroller.fill", TimeTraceDesign.violet),
-                .init("平均停留", averageStay.map(TimeTraceFormat.duration) ?? "—", "timer", TimeTraceDesign.blue),
+                .init("休闲次数", "\(sessions.count) 次", "gamecontroller.fill", design.violet),
+                .init("平均停留", averageStay.map(TimeTraceFormat.duration) ?? "—", "timer", design.blue),
                 .init("最长停留", longestStay.map(TimeTraceFormat.duration) ?? "—", "sparkles", .orange)
             ]
         case .other, .none:
             return [
-                .init("到访次数", "\(sessions.count) 次", "mappin.and.ellipse", TimeTraceDesign.violet),
-                .init("平均停留", averageStay.map(TimeTraceFormat.duration) ?? "—", "timer", TimeTraceDesign.blue),
+                .init("到访次数", "\(sessions.count) 次", "mappin.and.ellipse", design.violet),
+                .init("平均停留", averageStay.map(TimeTraceFormat.duration) ?? "—", "timer", design.blue),
                 .init("最长停留", longestStay.map(TimeTraceFormat.duration) ?? "—", "sparkles", .orange)
             ]
         }
@@ -348,7 +392,7 @@ struct InsightsView: View {
     private var intervals: (current: DateInterval, previous: DateInterval) {
         let current = range.interval(
             calendar: workCalendar,
-            now: Date(),
+            now: summaryNow,
             customStart: customStart,
             customEnd: customEnd
         )
@@ -364,19 +408,12 @@ struct InsightsView: View {
         return (current, DateInterval(start: previousStart, end: current.start))
     }
 
-    private var rangeDescription: String {
-        let formatter = DateFormatter()
-        formatter.locale = TimeTraceLocalization.locale
-        formatter.timeZone = workCalendar.timeZone
-        formatter.dateFormat = "yyyy年M月d日"
-        let lastDay = workCalendar.date(byAdding: .day, value: -1, to: intervals.current.end)
-            ?? intervals.current.end
-        return "\(formatter.string(from: intervals.current.start)) – \(formatter.string(from: lastDay)) · 横轴按天"
-    }
 
 }
 
 private struct StatTile: View {
+    @Environment(\.timeTraceDesign) private var design
+
     let title: String
     let value: String
     let icon: String
@@ -384,13 +421,12 @@ private struct StatTile: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 12) {
             TTIcon(systemName: icon, tint: tint)
-            Text(title).font(.caption).foregroundStyle(TimeTraceDesign.muted)
+            Text(title).font(.caption).foregroundStyle(design.muted)
             Text(value).font(.title3.weight(.bold)).lineLimit(2).minimumScaleFactor(0.75)
         }
         .frame(maxWidth: .infinity, minHeight: 132, alignment: .leading)
         .padding(15)
-        .background(TimeTraceDesign.card, in: RoundedRectangle(cornerRadius: 20, style: .continuous))
-        .overlay { RoundedRectangle(cornerRadius: 20, style: .continuous).stroke(tint.opacity(0.13), lineWidth: 1) }
+        .timeTraceCardSurface()
     }
 }
 
@@ -453,17 +489,19 @@ private struct PlaceInsightPresentation {
     }
 }
 
-private enum InsightRange: String, CaseIterable, Identifiable {
-    case recentThreeDays
+enum InsightRange: String, CaseIterable, Identifiable {
+    case today
+    case recentThreeDays = "recent_three_days"
     case thisWeek
-    case previousWeek
-    case recentMonth
+    case previousWeek = "previous_week"
+    case recentMonth = "recent_month"
     case custom
 
     var id: Self { self }
 
     var title: String {
         switch self {
+        case .today: "今天"
         case .recentThreeDays: "近三天"
         case .thisWeek: "本周"
         case .previousWeek: "上一周"
@@ -472,10 +510,24 @@ private enum InsightRange: String, CaseIterable, Identifiable {
         }
     }
 
+    func summaryRanges(calendar: Calendar, now: Date, customStart: Date, customEnd: Date) -> [(String, DateInterval)] {
+        let ranges: [InsightRange] = [.recentThreeDays, .recentMonth] + (self == .custom ? [.custom] : [])
+        return ranges.compactMap { value in
+            let interval = value.interval(calendar: calendar, now: now, customStart: customStart, customEnd: customEnd)
+            // The backend accepts only ranges containing today, at most 366 elapsed days.
+            // Unsupported ranges still render the local journal.
+            let days = Int(interval.duration / 86_400)
+            guard interval.start <= now, now < interval.end, (1...366).contains(days) else { return nil }
+            return (value.rawValue, interval)
+        }
+    }
+
     func interval(calendar: Calendar, now: Date, customStart: Date, customEnd: Date) -> DateInterval {
         let today = calendar.startOfDay(for: now)
         let tomorrow = calendar.date(byAdding: .day, value: 1, to: today) ?? now
         switch self {
+        case .today:
+            return DateInterval(start: today, end: tomorrow)
         case .recentThreeDays:
             let start = calendar.date(byAdding: .day, value: -2, to: today) ?? today
             return DateInterval(start: start, end: tomorrow)
@@ -523,11 +575,11 @@ private enum TrendMetric: String, CaseIterable, Identifiable {
         }
     }
 
-    var color: Color {
+    func color(design: TimeTraceDesign) -> Color {
         switch self {
-        case .workDuration: TimeTraceDesign.blue
+        case .workDuration: design.blue
         case .arrival: Color(red: 0.34, green: 0.45, blue: 0.30)
-        case .departure: TimeTraceDesign.violet
+        case .departure: design.violet
         }
     }
 
@@ -568,6 +620,7 @@ private struct WorkTrendPoint: Identifiable {
 }
 
 private struct PlaceTrendChart: View {
+    @Environment(\.timeTraceDesign) private var design
     let summary: PeriodActivitySummary
     let metric: TrendMetric
     let presentation: PlaceInsightPresentation
@@ -599,7 +652,7 @@ private struct PlaceTrendChart: View {
                     .interpolationMethod(.catmullRom)
                     .foregroundStyle(
                         LinearGradient(
-                            colors: [metric.color.opacity(0.28), metric.color.opacity(0.02)],
+                            colors: [metric.color(design: design).opacity(0.28), metric.color(design: design).opacity(0.02)],
                             startPoint: .top,
                             endPoint: .bottom
                         )
@@ -614,14 +667,14 @@ private struct PlaceTrendChart: View {
                 )
                 .interpolationMethod(.catmullRom)
                 .lineStyle(StrokeStyle(lineWidth: 3, lineCap: .round, lineJoin: .round))
-                .foregroundStyle(metric.color)
+                .foregroundStyle(metric.color(design: design))
 
                 PointMark(
                     x: .value("日期", point.date),
                     y: .value(metric.title(for: presentation), point.value)
                 )
                 .symbolSize(point.isIncomplete ? 75 : 45)
-                .foregroundStyle(point.isIncomplete ? .orange : metric.color)
+                .foregroundStyle(point.isIncomplete ? .orange : metric.color(design: design))
             }
 
             if let average = metric.average(from: summary) {

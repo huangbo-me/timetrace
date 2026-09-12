@@ -42,6 +42,12 @@
 		BAC000000000000000000002 /* DataBackupService.swift in Sources */ = {isa = PBXBuildFile; fileRef = BAC000000000000000000001; };
 		BAC000000000000000000012 /* BackupArchive.swift in Sources */ = {isa = PBXBuildFile; fileRef = BAC000000000000000000011; };
 		BAC000000000000000000022 /* DataBackupView.swift in Sources */ = {isa = PBXBuildFile; fileRef = BAC000000000000000000021; };
+		ABC090800000000000000002 /* TimeJournalService.swift in Sources */ = {isa = PBXBuildFile; fileRef = ABC090800000000000000001; };
+		ABC090800000000000000012 /* TimeJournalView.swift in Sources */ = {isa = PBXBuildFile; fileRef = ABC090800000000000000011; };
+		DA1100000000000000000002 /* DailyInsightSummary.swift in Sources */ = {isa = PBXBuildFile; fileRef = DA1100000000000000000001; };
+		DA1200000000000000000002 /* InsightAPIClient.swift in Sources */ = {isa = PBXBuildFile; fileRef = DA1200000000000000000001; };
+		DA1200000000000000000012 /* DailyInsightSummaryService.swift in Sources */ = {isa = PBXBuildFile; fileRef = DA1200000000000000000011; };
+		DA1300000000000000000002 /* InsightSummaryTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = DA1300000000000000000001; };
 /* End PBXBuildFile section */
 
 /* Begin PBXContainerItemProxy section */
@@ -92,6 +98,12 @@
 		BAC000000000000000000001 /* DataBackupService.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; name = DataBackupService.swift; path = Persistence/DataBackupService.swift; sourceTree = "<group>"; };
 		BAC000000000000000000011 /* BackupArchive.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; name = BackupArchive.swift; path = Services/BackupArchive.swift; sourceTree = "<group>"; };
 		BAC000000000000000000021 /* DataBackupView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; name = DataBackupView.swift; path = Features/Settings/DataBackupView.swift; sourceTree = "<group>"; };
+		ABC090800000000000000001 /* TimeJournalService.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Domain/TimeJournalService.swift; sourceTree = "<group>"; };
+		ABC090800000000000000011 /* TimeJournalView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Features/Insights/TimeJournalView.swift; sourceTree = "<group>"; };
+		DA1100000000000000000001 /* DailyInsightSummary.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Domain/DailyInsightSummary.swift; sourceTree = "<group>"; };
+		DA1200000000000000000001 /* InsightAPIClient.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Services/InsightAPIClient.swift; sourceTree = "<group>"; };
+		DA1200000000000000000011 /* DailyInsightSummaryService.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Services/DailyInsightSummaryService.swift; sourceTree = "<group>"; };
+		DA1300000000000000000001 /* InsightSummaryTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = InsightSummaryTests.swift; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
 /* Begin PBXFrameworksBuildPhase section */
@@ -161,6 +173,11 @@
 				FC21C2C427EF3ABA49E4FD97 /* RootView.swift */,
 				111335E20644ED4A05943CB7 /* TimeTraceApp.swift */,
 				314FEF693B1E9E843EA1627F /* ActivitySessionEngine.swift */,
+				ABC090800000000000000001 /* TimeJournalService.swift */,
+				DA1100000000000000000001 /* DailyInsightSummary.swift */,
+				DA1200000000000000000011 /* DailyInsightSummaryService.swift */,
+				DA1200000000000000000001 /* InsightAPIClient.swift */,
+				ABC090800000000000000011 /* TimeJournalView.swift */,
 				347A64E6514960F2EBCA0A3F /* AnalyticsService.swift */,
 				957F045EC7316E8C5B2986DD /* Models.swift */,
 				FA051CBD13B8FE1C6BC6C0CF /* Repositories.swift */,
@@ -190,6 +207,7 @@
 			children = (
 				B88436FEFD9ABF305B0A4F2E /* ActivitySessionEngineTests.swift */,
 				BD24C86CDBA6370EBAD05C8B /* AnalyticsServiceTests.swift */,
+				DA1300000000000000000001 /* InsightSummaryTests.swift */,
 				6F1A3EEEAF54AB2BC1FB61CC /* RepositoryTests.swift */,
 			);
 			path = TimeTraceTests;
@@ -326,6 +344,11 @@
 				B4817055792A39952374C161 /* RootView.swift in Sources */,
 				775DB53DB71B1E75FCE67640 /* TimeTraceApp.swift in Sources */,
 				A96C5021CD2FC8659A855817 /* ActivitySessionEngine.swift in Sources */,
+				ABC090800000000000000002 /* TimeJournalService.swift in Sources */,
+				DA1100000000000000000002 /* DailyInsightSummary.swift in Sources */,
+				DA1200000000000000000012 /* DailyInsightSummaryService.swift in Sources */,
+				DA1200000000000000000002 /* InsightAPIClient.swift in Sources */,
+				ABC090800000000000000012 /* TimeJournalView.swift in Sources */,
 				0780573C75AE56C44D0C1D5F /* AnalyticsService.swift in Sources */,
 				D2D1A6847264FF905C2E5688 /* Models.swift in Sources */,
 				E5CA9DD22D2E7E577F8F5166 /* Repositories.swift in Sources */,
@@ -356,6 +379,7 @@
 			files = (
 				E79530DECA05CC38167CB7C0 /* ActivitySessionEngineTests.swift in Sources */,
 				E5ACE6E379E892F0F7AF24B9 /* AnalyticsServiceTests.swift in Sources */,
+				DA1300000000000000000002 /* InsightSummaryTests.swift in Sources */,
 				4ABD4097606445DB6ECCE8D7 /* RepositoryTests.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
@@ -377,6 +401,7 @@
 			buildSettings = {
 				APS_ENVIRONMENT = development;
 				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
+				ASSETCATALOG_COMPILER_ALTERNATE_APPICON_NAMES = "AppIconSage AppIconSky AppIconLavender AppIconRose";
 				ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME = AccentColor;
 				CLANG_ENABLE_OBJC_WEAK = NO;
 				CODE_SIGN_STYLE = Automatic;
@@ -397,7 +422,7 @@
 					"$(inherited)",
 					"@executable_path/Frameworks",
 				);
-				MARKETING_VERSION = 0.1.0;
+				MARKETING_VERSION = 0.1.1;
 				PRODUCT_BUNDLE_IDENTIFIER = com.chronora.time.trace;
 				PRODUCT_NAME = "$(TARGET_NAME)";
 				SDKROOT = iphoneos;
@@ -551,6 +576,7 @@
 			buildSettings = {
 				APS_ENVIRONMENT = production;
 				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
+				ASSETCATALOG_COMPILER_ALTERNATE_APPICON_NAMES = "AppIconSage AppIconSky AppIconLavender AppIconRose";
 				ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME = AccentColor;
 				CLANG_ENABLE_OBJC_WEAK = NO;
 				CODE_SIGN_STYLE = Automatic;
@@ -572,7 +598,7 @@
 					"$(inherited)",
 					"@executable_path/Frameworks",
 				);
-				MARKETING_VERSION = 0.1.0;
+				MARKETING_VERSION = 0.1.1;
 				PRODUCT_BUNDLE_IDENTIFIER = com.chronora.time.trace;
 				PRODUCT_NAME = "$(TARGET_NAME)";
 				SDKROOT = iphoneos;

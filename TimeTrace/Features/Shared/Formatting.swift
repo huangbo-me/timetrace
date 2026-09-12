@@ -31,6 +31,16 @@ enum TimeTraceFormat {
         return "\(totalMinutes / 60)小时 \(totalMinutes % 60)分钟"
     }
 
+    static func durationClock(_ interval: TimeInterval) -> String {
+        let seconds = max(0, Int(interval))
+        return String(format: "%02d:%02d:%02d", seconds / 3600, seconds / 60 % 60, seconds % 60)
+    }
+
+    static func durationWithSeconds(_ interval: TimeInterval) -> String {
+        let seconds = max(0, Int(interval))
+        return "\(seconds / 3600)小时 \(seconds / 60 % 60)分钟 \(seconds % 60)秒"
+    }
+
     static func signedDuration(_ interval: TimeInterval?) -> String {
         guard let interval else { return "暂无可比数据" }
         let prefix = interval >= 0 ? "+" : "−"

@@ -102,7 +102,30 @@ struct OnboardingState: Equatable { let locationAuthorizationStatus: CLAuthoriza
 }
 struct TodayState: Equatable { let activeReminderCount: Int; let isOnboarded: Bool }
 
-@MainActor final class InsightsFeatureStore: FeatureStore {}
+@MainActor final class InsightsFeatureStore: FeatureStore {
+    let dailySummary = DailyInsightSummary()
+    private var summaryObservation: AnyCancellable?
+
+    override init(application: AppModel) {
+        super.init(application: application)
+        summaryObservation = dailySummary.objectWillChange.sink { [weak self] _ in
+            self?.objectWillChange.send()
+        }
+    }
+
+    func loadDailySummary(calendar: Calendar, now: Date, additional: [(String, DateInterval)], retry: Bool = false) {
+        guard application.isLoaded, application.isOnboarded,
+              !application.isRestoringICloudData, !application.needsInitialCloudRestoreDecision else { return }
+        dailySummary.load(InsightSummaryRequest.make(sessions: application.workSessions,
+            places: application.workTriggers, calendar: calendar, now: now, additional: additional), retry: retry)
+    }
+
+    func journal(interval: DateInterval, previous: DateInterval, filter: PlaceSessionFilter,
+                 calendar: Calendar, now: Date) -> TimeJournal {
+        TimeJournalService().make(sessions: application.workSessions, places: application.workTriggers,
+            interval: interval, previous: previous, filter: filter, calendar: calendar, now: now)
+    }
+}
 
 @MainActor final class PlacesFeatureStore: FeatureStore {
     var state: PlacesState { PlacesState(placeCount: application.workTriggers.count) }

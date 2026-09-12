@@ -3,12 +3,61 @@ import MapKit
 import SwiftUI
 import UIKit
 
+/// Icon changes require an explicit opt-in. Launching the app or switching
+/// light/dark appearance must not produce a system icon alert.
+@MainActor
+final class ThemeIconController: ObservableObject {
+    @Published private(set) var isUpdating = false
+    @Published private(set) var errorMessage: String?
+
+    private let supportsIcons: () -> Bool
+    private let currentIcon: () -> String?
+    private let setIcon: (String?) async throws -> Void
+
+    init(supportsIcons: @escaping () -> Bool = { UIApplication.shared.supportsAlternateIcons },
+         currentIcon: @escaping () -> String? = { UIApplication.shared.alternateIconName },
+         setIcon: @escaping (String?) async throws -> Void = { try await UIApplication.shared.setAlternateIconName($0) }) {
+        self.supportsIcons = supportsIcons
+        self.currentIcon = currentIcon
+        self.setIcon = setIcon
+    }
+
+    @discardableResult
+    func updateIcon(for theme: AppTheme, followsTheme: Bool) -> Task<Void, Never>? {
+        guard !isUpdating else { return nil }
+        errorMessage = nil
+        guard followsTheme else { return nil }
+        let name = theme.alternateIconName
+        guard currentIcon() != name else { return nil }
+        guard supportsIcons() else {
+            errorMessage = "App 主题已更换，但当前设备不支持更换桌面图标。"
+            return nil
+        }
+        isUpdating = true
+        return Task {
+            defer { isUpdating = false }
+            do {
+                try await setIcon(name)
+            } catch {
+                errorMessage = "App 主题已更换，桌面图标更换失败，请重试。"
+            }
+        }
+    }
+}
+
 struct SettingsView: View {
+    @Environment(\.timeTraceDesign) private var design
+    @Environment(\.dynamicTypeSize) private var dynamicTypeSize
+
     @EnvironmentObject private var store: SettingsFeatureStore
     @Environment(\.openURL) private var openURL
     @AppStorage("profileNickname") private var profileNickname = ""
     @FocusState private var isNicknameFocused: Bool
     @State private var showingPlaces = false
+    @AppStorage("appTheme") private var themeName = AppTheme.paper.rawValue
+    @AppStorage("appAppearance") private var appearanceName = AppAppearance.system.rawValue
+    @AppStorage("desktopIconFollowsTheme") private var desktopIconFollowsTheme = false
+    @StateObject private var themeIcon = ThemeIconController()
 
     private var model: AppModel { store.application }
 #if DEBUG
@@ -25,17 +74,17 @@ struct SettingsView: View {
                     TimeTraceMark(size: 48)
                     VStack(alignment: .leading, spacing: 2) {
                         Text("时迹").font(.title2.weight(.bold))
-                        Text("TimeTrace · 记录每一段专注时光").font(.caption).foregroundStyle(TimeTraceDesign.muted)
+                        Text("TimeTrace · 记录每一段专注时光").font(.caption).foregroundStyle(design.muted)
                     }
                 }
 
                 TTSectionTitle(title: "个人资料")
                 TTCard {
                     HStack(spacing: 12) {
-                        TTIcon(systemName: "person.fill", tint: TimeTraceDesign.blue, size: 42)
+                        TTIcon(systemName: "person.fill", tint: design.blue, size: 42)
                         VStack(alignment: .leading, spacing: 3) {
                             Text("昵称").font(.subheadline.weight(.medium))
-                            Text("最多 10 个汉字或 20 个英文字符").font(.caption).foregroundStyle(TimeTraceDesign.muted)
+                            Text("最多 10 个汉字或 20 个英文字符").font(.caption).foregroundStyle(design.muted)
                         }
                         Spacer()
                         TextField("未设置", text: $profileNickname)
@@ -51,19 +100,116 @@ struct SettingsView: View {
                     }
                 }
 
+                TTSectionTitle(title: "外观")
+                TTCard {
+                    VStack(spacing: 16) {
+                        VStack(alignment: .leading, spacing: 12) {
+                            Text("App 主题").font(.subheadline.weight(.medium))
+                            // Direct buttons avoid the system menu's lingering source highlight
+                            // while an appearance change redraws the presenting view.
+                            LazyVGrid(columns: [GridItem(.adaptive(minimum: dynamicTypeSize.isAccessibilitySize ? 100 : 52))], spacing: 12) {
+                                ForEach(AppTheme.allCases) { theme in
+                                    let palette = TimeTraceDesign(theme: theme)
+                                    let selected = themeName == theme.rawValue
+                                    Button {
+                                        themeName = theme.rawValue
+                                        themeIcon.updateIcon(for: theme, followsTheme: desktopIconFollowsTheme)
+                                    } label: {
+                                        VStack(spacing: 8) {
+                                            Circle().fill(palette.blue)
+                                                .frame(width: 32, height: 32)
+                                                .overlay {
+                                                    if selected {
+                                                        Image(systemName: "checkmark")
+                                                            .font(.caption.weight(.bold))
+                                                            .foregroundStyle(palette.onAccent)
+                                                    }
+                                                }
+                                                .padding(4)
+                                                .overlay {
+                                                    Circle().strokeBorder(selected ? design.blue : .clear, lineWidth: 2)
+                                                }
+                                            Text(theme.title)
+                                                .font(.caption.weight(selected ? .semibold : .regular))
+                                                .foregroundStyle(design.ink)
+                                        }
+                                        .frame(maxWidth: .infinity, minHeight: 64)
+                                        .contentShape(Rectangle())
+                                    }
+                                    .buttonStyle(.plain)
+                                    .disabled(themeIcon.isUpdating)
+                                    .accessibilityLabel("App 主题：" + theme.title)
+                                    .accessibilityAddTraits(selected ? [.isSelected] : [])
+                                }
+                            }
+                        }
+                        Divider()
+                        VStack(alignment: .leading, spacing: 12) {
+                            Text("显示模式").font(.subheadline.weight(.medium))
+                            LazyVGrid(columns: [GridItem(.adaptive(minimum: dynamicTypeSize.isAccessibilitySize ? 180 : 84))], spacing: 8) {
+                                ForEach(AppAppearance.allCases) { appearance in
+                                    let selected = appearanceName == appearance.rawValue
+                                    Button {
+                                        appearanceName = appearance.rawValue
+                                    } label: {
+                                        Text(appearance.title)
+                                            .font(.subheadline.weight(selected ? .semibold : .regular))
+                                            .foregroundStyle(selected ? design.onAccent : design.ink)
+                                            .frame(maxWidth: .infinity, minHeight: 44)
+                                            .background(selected ? design.blue : design.canvas,
+                                                        in: RoundedRectangle(cornerRadius: 10))
+                                            .contentShape(Rectangle())
+                                    }
+                                    .buttonStyle(.plain)
+                                    .accessibilityLabel("显示模式：" + appearance.title)
+                                    .accessibilityAddTraits(selected ? [.isSelected] : [])
+                                }
+                            }
+                        }
+                        Divider()
+                        Toggle("桌面图标跟随主题", isOn: $desktopIconFollowsTheme)
+                            .font(.subheadline.weight(.medium))
+                            .tint(design.blue)
+                            .disabled(themeIcon.isUpdating)
+                            .onChange(of: desktopIconFollowsTheme) { _, enabled in
+                                themeIcon.updateIcon(for: AppTheme(rawValue: themeName) ?? .paper, followsTheme: enabled)
+                            }
+                        Text(desktopIconFollowsTheme
+                             ? "已开启：桌面图标随主题更换，系统会显示更换提示。"
+                             : "已关闭：切换主题只改变 App 外观，保留当前桌面图标。")
+                            .font(.caption).foregroundStyle(design.muted)
+                            .frame(maxWidth: .infinity, alignment: .leading)
+                        if themeIcon.isUpdating {
+                            ProgressView("正在更换桌面图标…")
+                                .font(.caption)
+                        }
+                        if desktopIconFollowsTheme, let message = themeIcon.errorMessage {
+                            VStack(alignment: .leading, spacing: 8) {
+                                Text(message).font(.caption).foregroundStyle(design.muted)
+                                Button("重试更换图标") {
+                                    themeIcon.updateIcon(for: AppTheme(rawValue: themeName) ?? .paper, followsTheme: desktopIconFollowsTheme)
+                                }
+                                .buttonStyle(.glass)
+                                .disabled(themeIcon.isUpdating)
+                            }
+                            .frame(maxWidth: .infinity, alignment: .leading)
+                        }
+                    }
+                }
+
                 TTSectionTitle(title: "数据管理")
                 TTCard {
                     NavigationLink {
                         DataBackupView()
                     } label: {
                         HStack(spacing: 12) {
-                            TTIcon(systemName: "externaldrive.fill", tint: TimeTraceDesign.blue, size: 36)
+                            TTIcon(systemName: "externaldrive.fill", tint: design.blue, size: 36)
                             VStack(alignment: .leading, spacing: 3) {
-                                Text("数据备份").font(.subheadline.weight(.medium)).foregroundStyle(TimeTraceDesign.ink)
-                                Text("iCloud 同步、数据导入与导出").font(.caption).foregroundStyle(TimeTraceDesign.muted)
+                                Text("数据备份").font(.subheadline.weight(.medium)).foregroundStyle(design.ink)
+                                Text("iCloud 同步、数据导入与导出").font(.caption).foregroundStyle(design.muted)
                             }
                             Spacer()
-                            Image(systemName: "chevron.right").font(.caption.weight(.bold)).foregroundStyle(TimeTraceDesign.muted)
+                            Image(systemName: "chevron.right").font(.caption.weight(.bold)).foregroundStyle(design.muted)
                         }
                         .frame(maxWidth: .infinity, alignment: .leading)
                         .contentShape(Rectangle())
@@ -77,11 +223,11 @@ struct SettingsView: View {
                         ReminderManagementView()
                     } label: {
                         HStack(spacing: 12) {
-                            TTIcon(systemName: "bell.badge", tint: TimeTraceDesign.violet, size: 36)
+                            TTIcon(systemName: "bell.badge", tint: design.violet, size: 36)
                             VStack(alignment: .leading, spacing: 3) {
                                 Text("管理提醒").font(.subheadline.weight(.medium))
                                 Text("\(model.reminders.count) 个提醒 · 添加、编辑与删除")
-                                    .font(.caption).foregroundStyle(TimeTraceDesign.muted)
+                                    .font(.caption).foregroundStyle(design.muted)
                             }
                             Spacer()
                             Image(systemName: "chevron.right").font(.caption.weight(.bold))
@@ -96,20 +242,20 @@ struct SettingsView: View {
                 TTLocationPermissionNotice(status: model.locationAuthorizationStatus)
                 TTCard {
                     VStack(spacing: 14) {
-                        settingsRow("定位权限", detail: authorizationText, icon: "location.fill", tint: TimeTraceDesign.blue) {
+                        settingsRow("定位权限", detail: authorizationText, icon: "location.fill", tint: design.blue) {
                             openSystemSettings()
                         }
                         Divider()
-                        settingsRow("地点", detail: "已设置 \(model.workTriggers.count) 个地点", icon: "mappin.and.ellipse", tint: TimeTraceDesign.violet) {
+                        settingsRow("地点", detail: "已设置 \(model.workTriggers.count) 个地点", icon: "mappin.and.ellipse", tint: design.violet) {
                             showingPlaces = true
                         }
                         Divider()
                         HStack(spacing: 12) {
-                            TTIcon(systemName: "location.fill", tint: TimeTraceDesign.blue, size: 36)
+                            TTIcon(systemName: "location.fill", tint: design.blue, size: 36)
                             VStack(alignment: .leading, spacing: 2) {
                                 Text("自动记录").font(.subheadline.weight(.medium))
                                 Text(model.automaticRecordingDetail)
-                                    .font(.caption).foregroundStyle(TimeTraceDesign.muted)
+                                    .font(.caption).foregroundStyle(design.muted)
                             }
                             Spacer()
                         }
@@ -124,9 +270,9 @@ struct SettingsView: View {
                 TTCard {
                     VStack(alignment: .leading, spacing: 14) {
                         Toggle("启用测试数据工具", isOn: $developerDemoToolsEnabled)
-                            .tint(TimeTraceDesign.blue)
+                            .tint(design.blue)
                         Text("仅 Debug 构建可见；会生成覆盖全部地点类型及对应时段的示例记录，不会进入线上产品。")
-                            .font(.caption).foregroundStyle(TimeTraceDesign.muted)
+                            .font(.caption).foregroundStyle(design.muted)
                         if developerDemoToolsEnabled {
                             Divider()
                             Button {
@@ -139,8 +285,9 @@ struct SettingsView: View {
                             } label: {
                                 Label("生成 30 天全场景测试数据", systemImage: "wand.and.stars")
                             }
-                            .buttonStyle(.borderedProminent)
-                            .tint(TimeTraceDesign.blue)
+                            .buttonStyle(.glassProminent)
+                            .foregroundStyle(design.onAccent)
+                            .tint(design.blue)
 
                             if model.activeDemoSessionCount > 0 {
                                 Button(role: .destructive) {
@@ -153,12 +300,32 @@ struct SettingsView: View {
                     }
                 }
 #endif
+                TTSectionTitle(title: "关于")
+                TTCard {
+                    NavigationLink {
+                        AboutView()
+                    } label: {
+                        HStack(spacing: 12) {
+                            TTIcon(systemName: "info.circle.fill", tint: design.blue, size: 36)
+                            VStack(alignment: .leading, spacing: 3) {
+                                Text("关于时迹").font(.subheadline.weight(.medium)).foregroundStyle(design.ink)
+                                Text("版本 \(AppVersionInfo.version)").font(.caption).foregroundStyle(design.muted)
+                            }
+                            Spacer()
+                            Image(systemName: "chevron.right").font(.caption.weight(.bold)).foregroundStyle(design.muted)
+                        }
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                        .contentShape(Rectangle())
+                    }
+                    .buttonStyle(.plain)
+                }
+
                 TTSectionTitle(title: "隐私与数据")
                 TTCard {
                     HStack(alignment: .top, spacing: 12) {
-                        TTIcon(systemName: "lock.fill", tint: TimeTraceDesign.violet)
+                        TTIcon(systemName: "lock.fill", tint: design.violet)
                         Text("活动与位置事件会保存在本机；iCloud 同步可用时，地点、围栏半径、工作日设置与记录都会同步到您的私有 iCloud 数据库。TimeTrace 只记录围栏进出，不保存连续轨迹。")
-                            .font(.subheadline).foregroundStyle(TimeTraceDesign.muted)
+                            .font(.subheadline).foregroundStyle(design.muted)
                     }
                 }
             }
@@ -220,11 +387,11 @@ struct SettingsView: View {
             HStack(spacing: 12) {
                 TTIcon(systemName: icon, tint: tint, size: 36)
                 VStack(alignment: .leading, spacing: 2) {
-                    Text(title).font(.subheadline.weight(.medium)).foregroundStyle(TimeTraceDesign.ink)
-                    Text(detail).font(.caption).foregroundStyle(TimeTraceDesign.muted)
+                    Text(title).font(.subheadline.weight(.medium)).foregroundStyle(design.ink)
+                    Text(detail).font(.caption).foregroundStyle(design.muted)
                 }
                 Spacer()
-                Image(systemName: "chevron.right").font(.caption.weight(.bold)).foregroundStyle(TimeTraceDesign.muted)
+                Image(systemName: "chevron.right").font(.caption.weight(.bold)).foregroundStyle(design.muted)
             }
             .frame(maxWidth: .infinity, alignment: .leading)
             .contentShape(Rectangle())
@@ -252,7 +419,126 @@ struct SettingsView: View {
     }
 }
 
+private enum AppVersionInfo {
+    static let version = Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String ?? "未知"
+    static let build = Bundle.main.object(forInfoDictionaryKey: "CFBundleVersion") as? String ?? "未知"
+    static let description = "时迹 TimeTrace · 版本 \(version)（构建 \(build)）"
+}
+
+private struct AboutView: View {
+    @Environment(\.timeTraceDesign) private var design
+    @State private var showingCopyConfirmation = false
+    @State private var showingEmailCopyConfirmation = false
+    private let feedbackEmail = "huangbo.me@gmail.com"
+
+    var body: some View {
+        ScrollView(showsIndicators: false) {
+            VStack(alignment: .leading, spacing: 18) {
+                VStack(spacing: 12) {
+                    TimeTraceMark(size: 80)
+                    Text("时迹 TimeTrace").font(.title2.weight(.bold))
+                    Text("看见时间，留住生活的足迹。")
+                        .font(.subheadline).foregroundStyle(design.muted)
+                }
+                .multilineTextAlignment(.center)
+                .frame(maxWidth: .infinity)
+                .padding(.vertical, 20)
+
+                TTSectionTitle(title: "应用介绍")
+                TTCard {
+                    Text("时迹帮助你记录在已设置地点停留的时间，通过历史记录、统计和时间手记，回顾每天的时间去向。")
+                        .font(.subheadline).foregroundStyle(design.muted)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                }
+
+                TTSectionTitle(title: "版本信息")
+                TTCard {
+                    VStack(alignment: .leading, spacing: 14) {
+                        informationRow("版本号", value: AppVersionInfo.version)
+                        Divider()
+                        informationRow("构建号", value: AppVersionInfo.build)
+                        Divider()
+                        Button {
+                            UIPasteboard.general.string = AppVersionInfo.description
+                            showingCopyConfirmation = true
+                        } label: {
+                            Label("复制版本信息", systemImage: "doc.on.doc")
+                                .font(.subheadline.weight(.medium))
+                                .foregroundStyle(design.blue)
+                                .frame(maxWidth: .infinity, minHeight: 44, alignment: .leading)
+                                .contentShape(Rectangle())
+                        }
+                        .buttonStyle(.plain)
+                    }
+                }
+
+                TTSectionTitle(title: "联系与反馈")
+                TTCard {
+                    VStack(alignment: .leading, spacing: 10) {
+                        Text("反馈邮箱").font(.subheadline.weight(.medium))
+                        Button {
+                            UIPasteboard.general.string = feedbackEmail
+                            showingEmailCopyConfirmation = true
+                        } label: {
+                            HStack(spacing: 12) {
+                                Text(feedbackEmail)
+                                    .multilineTextAlignment(.leading)
+                                Spacer(minLength: 0)
+                                Image(systemName: "doc.on.doc")
+                            }
+                            .font(.subheadline)
+                            .foregroundStyle(design.blue)
+                            .frame(maxWidth: .infinity, minHeight: 44, alignment: .leading)
+                            .contentShape(Rectangle())
+                        }
+                        .buttonStyle(.plain)
+                        .accessibilityLabel("复制反馈邮箱：\(feedbackEmail)")
+                        Text("点击邮箱即可复制。反馈问题时，请附上版本信息和操作步骤，帮助我们定位问题。")
+                            .font(.caption).foregroundStyle(design.muted)
+                    }
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                }
+            }
+            .padding(.horizontal, 20)
+            .padding(.top, 12)
+            .padding(.bottom, 28)
+        }
+        .timeTraceScreen()
+        .navigationTitle("关于时迹")
+        .navigationBarTitleDisplayMode(.inline)
+        .alert("已复制版本信息", isPresented: $showingCopyConfirmation) {
+            Button("好", role: .cancel) {}
+        } message: {
+            Text(AppVersionInfo.description)
+        }
+        .alert("已复制邮箱", isPresented: $showingEmailCopyConfirmation) {
+            Button("好", role: .cancel) {}
+        } message: {
+            Text(feedbackEmail)
+        }
+    }
+
+    private func informationRow(_ title: String, value: String) -> some View {
+        ViewThatFits(in: .horizontal) {
+            HStack {
+                Text(title)
+                Spacer(minLength: 16)
+                Text(value).foregroundStyle(design.muted).fixedSize()
+            }
+            VStack(alignment: .leading, spacing: 6) {
+                Text(title)
+                Text(value).foregroundStyle(design.muted)
+            }
+        }
+        .font(.subheadline)
+        .textSelection(.enabled)
+        .accessibilityElement(children: .combine)
+    }
+}
+
 struct WorkplaceEditorView: View {
+    @Environment(\.timeTraceDesign) private var design
+
     @EnvironmentObject private var store: SettingsFeatureStore
     @Environment(\.dismiss) private var dismiss
     @State private var coordinate: CLLocationCoordinate2D
@@ -313,7 +599,7 @@ struct WorkplaceEditorView: View {
                     Slider(value: $radius, in: 10...1000, step: 10)
                     Text("拖动滑块时，地图会即时更新围栏范围。建议至少设为 100 米。")
                         .font(.caption)
-                        .foregroundStyle(TimeTraceDesign.muted)
+                        .foregroundStyle(design.muted)
                     Text("轻点地图设定地点，或拖动红色图钉微调。地图不会拦截上下滑动；搜索或定位可重新居中地图。")
                         .font(.footnote)
                         .foregroundStyle(.secondary)
@@ -329,6 +615,8 @@ struct WorkplaceEditorView: View {
                     usesReducedAccuracy: usesReducedAccuracy
                 )
             }
+            .scrollContentBackground(.hidden)
+            .timeTraceScreen()
             .navigationTitle(trigger == nil ? "添加地点" : "编辑地点")
             .onAppear {
                 if let trigger, let lat = trigger.latitude, let lon = trigger.longitude {
@@ -424,6 +712,8 @@ struct WorkplaceEditorView: View {
 
 
 private struct ReminderManagementView: View {
+    @Environment(\.timeTraceDesign) private var design
+
     @EnvironmentObject private var store: SettingsFeatureStore
     @Environment(\.openURL) private var openURL
     @Environment(\.scenePhase) private var scenePhase
@@ -454,7 +744,7 @@ private struct ReminderManagementView: View {
                     Button { editing = reminder } label: {
                         HStack {
                             VStack(alignment: .leading, spacing: 5) {
-                                Text(reminder.name).foregroundStyle(TimeTraceDesign.ink)
+                                Text(reminder.name).foregroundStyle(design.ink)
                                 Text(String(format: "%02d:%02d", reminder.hour, reminder.minute) + " · " + weekdayText(reminder.weekdaysMask))
                                     .font(.caption).foregroundStyle(.secondary)
                             }
@@ -470,6 +760,8 @@ private struct ReminderManagementView: View {
                 Text("点击提醒可编辑或删除。通知中可开始、延后或跳过；开始后可在今天页完成活动。")
             }
         }
+        .scrollContentBackground(.hidden)
+        .timeTraceScreen()
         .navigationTitle("活动提醒")
         .sheet(isPresented: $adding) { ReminderEditorView(reminder: nil) }
         .sheet(item: $editing) { ReminderEditorView(reminder: $0) }
@@ -532,6 +824,8 @@ private struct ReminderEditorView: View {
                     }
                 }
             }
+            .scrollContentBackground(.hidden)
+            .timeTraceScreen()
             .disabled(busy)
             .navigationTitle(reminder == nil ? "添加提醒" : "编辑提醒")
             .toolbar {

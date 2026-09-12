@@ -1,11 +1,14 @@
 import SwiftUI
 
 struct HistoryView: View {
+    @Environment(\.timeTraceDesign) private var design
+
     @EnvironmentObject private var store: HistoryFeatureStore
     @State private var repairingEvent: ActivityEvent?
     @State private var selectedSummary: DailyActivitySummary?
     @State private var addingSession = false
     @State private var displayedHistoryCount = 12
+    @State private var selectedType: HistoryTypeFilter = .all
 
     private let historyPageSize = 12
 
@@ -17,6 +20,7 @@ struct HistoryView: View {
         let pendingSessions = sessionsNeedingCompletion
         let activeSessions = activeWorkSessions
         let allSummaries = completedSummaries
+        let orphanedEvents = filteredOrphanedEvents
         let origins = originBySessionID
         let visibleSummaries = Array(allSummaries.prefix(displayedHistoryCount))
         let leftSummaries = visibleSummaries.enumerated().compactMap { index, summary in
@@ -30,21 +34,30 @@ struct HistoryView: View {
             VStack(alignment: .leading, spacing: 16) {
                 HStack {
                     VStack(alignment: .leading, spacing: 3) {
-                        Text("过去的每一天都值得回顾").font(.subheadline).foregroundStyle(TimeTraceDesign.muted)
+                        Text("过去的每一天都值得回顾").font(.subheadline).foregroundStyle(design.muted)
                     }
                     Spacer()
                     Button { addingSession = true } label: {
                         Image(systemName: "plus").font(.headline.weight(.bold))
-                            .frame(width: 40, height: 40).background(TimeTraceDesign.card, in: Circle())
+                            .frame(width: 44, height: 44)
                     }
+                    .buttonStyle(.glass)
+                    .buttonBorderShape(.circle)
+                    .accessibilityLabel("添加记录")
                 }
 
-                if allSummaries.isEmpty && pendingSessions.isEmpty && activeSessions.isEmpty && model.orphanedWorkExitEvents.isEmpty {
-                    ContentUnavailableView("还没有历史记录", systemImage: "calendar")
+                typeFilter
+
+                if allSummaries.isEmpty && pendingSessions.isEmpty && activeSessions.isEmpty && orphanedEvents.isEmpty {
+                    ContentUnavailableView(
+                        selectedType == .all ? "还没有历史记录" : "暂无\(selectedType.title)记录",
+                        systemImage: "calendar",
+                        description: Text(selectedType == .all ? "记录活动后，可在这里回顾。" : "可以切换其他类型或查看全部记录。")
+                    )
                         .frame(maxWidth: .infinity, minHeight: 360)
                 }
 
-                let pendingCount = pendingSessions.count + model.orphanedWorkExitEvents.count
+                let pendingCount = pendingSessions.count + orphanedEvents.count
                 if pendingCount > 0 {
                     TTSectionTitle(title: "待补齐（\(pendingCount)）")
                     VStack(spacing: 8) {
@@ -56,7 +69,7 @@ struct HistoryView: View {
                             .accessibilityHint("补齐这段时间记录的结束时间")
                         }
 
-                        ForEach(model.orphanedWorkExitEvents, id: \.id) { event in
+                        ForEach(orphanedEvents, id: \.id) { event in
                             Button { repairingEvent = event } label: {
                                 HistoryOrphanedExitRow(event: event)
                             }
@@ -69,7 +82,7 @@ struct HistoryView: View {
                         }
                     }
 
-                    if !model.orphanedWorkExitEvents.isEmpty {
+                    if !orphanedEvents.isEmpty {
                         Text("缺少到达记录的异常可直接补录；原始定位事实会保留。")
                             .font(.caption)
                             .foregroundStyle(.secondary)
@@ -117,11 +130,67 @@ struct HistoryView: View {
         }
         .timeTraceScreen()
         .timeTraceTabTitle("历史记录")
+        .onChange(of: selectedType) { _, _ in
+            displayedHistoryCount = historyPageSize
+        }
         .sheet(item: $repairingEvent) { RepairOrphanedExitView(event: $0) }
         .sheet(item: $selectedSummary) { summary in
             HistoryDayDetailView(summary: summary, origins: origins, onSaved: { selectedSummary = nil })
         }
         .sheet(isPresented: $addingSession) { AddSessionView() }
+    }
+
+    private var typeFilter: some View {
+        ScrollView(.horizontal, showsIndicators: false) {
+            HStack(spacing: 9) {
+                ForEach(HistoryTypeFilter.options, id: \.self) { filter in
+                    Button {
+                        selectedType = filter
+                    } label: {
+                        Text(filter.title)
+                            .font(.subheadline.weight(.semibold))
+                            .foregroundStyle(selectedType == filter ? design.onAccent : design.ink)
+                            .padding(.horizontal, 15)
+                            .padding(.vertical, 10)
+                            .background(
+                                selectedType == filter ? design.violet : design.card,
+                                in: Capsule()
+                            )
+                            .overlay {
+                                Capsule().stroke(selectedType == filter ? .clear : design.border, lineWidth: 1)
+                            }
+                    }
+                    .buttonStyle(.plain)
+                    .accessibilityLabel("类型：\(filter.title)")
+                    .accessibilityAddTraits(selectedType == filter ? .isSelected : [])
+                }
+            }
+            .padding(.horizontal, 1)
+        }
+    }
+
+    private var filteredOrphanedEvents: [ActivityEvent] {
+        model.orphanedWorkExitEvents.filter { event in
+            selectedType.includes(placeType(
+                triggerId: UUID(uuidString: event.metadata.values["placeTriggerId"] ?? ""),
+                event: event
+            ))
+        }
+    }
+
+    private func matchesType(_ session: ActivitySession) -> Bool {
+        selectedType.includes(placeType(
+            triggerId: session.placeTriggerId,
+            event: model.events.first { $0.id == session.startEventId }
+        ))
+    }
+
+    private func placeType(triggerId: UUID?, event: ActivityEvent?) -> PlaceType? {
+        if let triggerId, let trigger = model.triggers.first(where: { $0.id == triggerId }) {
+            return trigger.placeType
+        }
+        // Preserve classification from the recorded event after a place is deleted.
+        return event?.metadata.values["placeType"].flatMap(PlaceType.init(rawValue:))
     }
 
     private var completedSummaries: [DailyActivitySummary] {
@@ -137,13 +206,13 @@ struct HistoryView: View {
 
     private var sessionsNeedingCompletion: [ActivitySession] {
         workSessions
-            .filter { $0.endAt == nil && $0.status != .active }
+            .filter { matchesType($0) && $0.endAt == nil && $0.status != .active }
             .sorted { $0.startAt > $1.startAt }
     }
 
     private var activeWorkSessions: [ActivitySession] {
         workSessions
-            .filter { $0.endAt == nil && $0.status == .active }
+            .filter { matchesType($0) && $0.endAt == nil && $0.status == .active }
             .sorted { $0.startAt > $1.startAt }
     }
 
@@ -178,7 +247,7 @@ struct HistoryView: View {
     }
 
     private func completedSummary(from summary: DailyActivitySummary) -> DailyActivitySummary? {
-        let sessions = summary.sessions.filter { $0.endAt != nil }
+        let sessions = summary.sessions.filter { $0.endAt != nil && matchesType($0) }
         guard !sessions.isEmpty else { return nil }
         return DailyActivitySummary(
             date: summary.date,
@@ -218,7 +287,7 @@ struct HistoryView: View {
             .contentShape(RoundedRectangle(cornerRadius: 22, style: .continuous))
         }
         .buttonStyle(.plain)
-        .accessibilityHint("打开当天的全部记录时段")
+        .accessibilityHint("打开当天筛选后的记录时段")
         .onAppear {
             guard summary.id == visibleSummaries.last?.id,
                   visibleSummaries.count < allSummaries.count else { return }
@@ -234,6 +303,30 @@ struct HistoryView: View {
         case ..<(6 * 60 * 60): .short
         case ..<(9 * 60 * 60): .regular
         default: .long
+        }
+    }
+}
+
+private enum HistoryTypeFilter: Hashable {
+    case all
+    case type(PlaceType)
+    case unclassified
+
+    static var options: [Self] { [.all] + PlaceType.allCases.map { .type($0) } + [.unclassified] }
+
+    var title: String {
+        switch self {
+        case .all: "全部"
+        case .type(let type): type.displayName
+        case .unclassified: "未分类"
+        }
+    }
+
+    func includes(_ type: PlaceType?) -> Bool {
+        switch self {
+        case .all: true
+        case .type(let selected): type == selected
+        case .unclassified: type == nil
         }
     }
 }
@@ -314,26 +407,27 @@ private enum HistoryRecordOrigin {
         }
     }
 
-    var tint: Color {
+    func tint(design: TimeTraceDesign) -> Color {
         switch self {
-        case .system: TimeTraceDesign.blue
-        case .manual: TimeTraceDesign.violet
+        case .system: design.blue
+        case .manual: design.violet
         case .backfilled: .orange
         }
     }
 }
 
 private struct HistoryOriginBadge: View {
+    @Environment(\.timeTraceDesign) private var design
     let origin: HistoryRecordOrigin
 
     var body: some View {
         Label(origin.label, systemImage: origin.icon)
             .font(.caption2.weight(.semibold))
-            .foregroundStyle(origin.tint)
+            .foregroundStyle(origin.tint(design: design))
             .lineLimit(1)
             .padding(.horizontal, 7)
             .padding(.vertical, 4)
-            .background(origin.tint.opacity(0.1), in: Capsule())
+            .background(origin.tint(design: design).opacity(0.1), in: Capsule())
             .accessibilityLabel("来源：\(origin.label)")
     }
 }
@@ -425,6 +519,8 @@ private struct HistoryOrphanedExitRow: View {
 }
 
 private struct HistoryDayCard: View {
+    @Environment(\.timeTraceDesign) private var design
+
     let summary: DailyActivitySummary
     let durationTier: HistoryDurationTier
     let origins: [UUID: HistoryRecordOrigin]
@@ -452,10 +548,10 @@ private struct HistoryDayCard: View {
                 if hasOvernightSession {
                     Text("跨天")
                         .font(.caption2.weight(.semibold))
-                        .foregroundStyle(TimeTraceDesign.violet)
+                        .foregroundStyle(design.violet)
                         .padding(.horizontal, 7)
                         .padding(.vertical, 4)
-                        .background(TimeTraceDesign.violet.opacity(0.1), in: Capsule())
+                        .background(design.violet.opacity(0.1), in: Capsule())
                         .accessibilityLabel("跨天记录")
                 }
 
@@ -512,6 +608,8 @@ private struct HistoryDayCard: View {
 }
 
 private struct HistoryDayDetailView: View {
+    @Environment(\.timeTraceDesign) private var design
+
     @Environment(\.dismiss) private var dismiss
     let summary: DailyActivitySummary
     let origins: [UUID: HistoryRecordOrigin]
@@ -547,7 +645,7 @@ private struct HistoryDayDetailView: View {
                                 }
                                 Image(systemName: "chevron.right")
                                     .font(.caption.weight(.semibold))
-                                    .foregroundStyle(TimeTraceDesign.muted)
+                                    .foregroundStyle(design.muted)
                             }
                             .contentShape(Rectangle())
                         }
@@ -556,6 +654,8 @@ private struct HistoryDayDetailView: View {
                     }
                 }
             }
+            .scrollContentBackground(.hidden)
+            .timeTraceScreen()
             .navigationTitle(TimeTraceFormat.day.string(from: summary.date))
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
@@ -745,6 +845,8 @@ struct EditSessionView: View {
                     Button("删除这条记录", role: .destructive) { confirmingDeletion = true }
                 }
             }
+            .scrollContentBackground(.hidden)
+            .timeTraceScreen()
             .navigationTitle("修正记录")
             .toolbar {
                 ToolbarItem(placement: .cancellationAction) { Button("取消") { dismiss() } }
@@ -805,6 +907,8 @@ struct RepairOrphanedExitView: View {
                         .foregroundStyle(.secondary)
                 }
             }
+            .scrollContentBackground(.hidden)
+            .timeTraceScreen()
             .navigationTitle("补齐异常记录")
             .toolbar {
                 ToolbarItem(placement: .cancellationAction) {
@@ -836,6 +940,8 @@ struct AddSessionView: View {
                 DatePicker("开始", selection: $startAt)
                 DatePicker("结束", selection: $endAt)
             }
+            .scrollContentBackground(.hidden)
+            .timeTraceScreen()
             .navigationTitle("补录时间记录")
             .toolbar {
                 ToolbarItem(placement: .cancellationAction) { Button("取消") { dismiss() } }

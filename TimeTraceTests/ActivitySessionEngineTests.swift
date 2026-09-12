@@ -35,10 +35,11 @@ final class ActivitySessionEngineTests: XCTestCase {
         let result = engine.reconcile(events: [event(.geofenceEnter, 9), event(.geofenceExit, 18), secondExit],
                                       existingSessions: [], now: date(day: 1, hour: 19))
         XCTAssertEqual(result.sessions.count, 1)
-        XCTAssertEqual(secondExit.disposition, .orphaned)
+        XCTAssertEqual(secondExit.disposition, .applied)
+        XCTAssertEqual(result.sessions[0].endAt, secondExit.timestamp)
     }
 
-    func testImmediateDuplicateExitForTheSameGeofenceIsRedundant() {
+    func testRepeatedGeofenceExitReplacesTheEndEvent() {
         let officeId = UUID()
         let enter = geofenceEvent(.geofenceEnter, placeId: officeId, hour: 9)
         let exit = geofenceEvent(.geofenceExit, placeId: officeId, hour: 18)
@@ -57,8 +58,66 @@ final class ActivitySessionEngineTests: XCTestCase {
         )
 
         XCTAssertEqual(result.sessions.count, 1)
-        XCTAssertEqual(result.sessions.first?.endEventId, exit.id)
-        XCTAssertEqual(duplicateExit.disposition, .redundant)
+        XCTAssertEqual(result.sessions.first?.endEventId, duplicateExit.id)
+        XCTAssertEqual(result.sessions.first?.endAt, duplicateExit.timestamp)
+        XCTAssertEqual(exit.disposition, .redundant)
+        XCTAssertEqual(duplicateExit.disposition, .applied)
+    }
+
+    func testConsecutiveGeofenceEventsUseFirstEntryAndLastExitWithoutTimeWindow() {
+        let place = UUID()
+        let first = geofenceEvent(.geofenceEnter, placeId: place, hour: 8)
+        let repeated = geofenceEvent(.geofenceEnter, placeId: place, hour: 9)
+        let exit = geofenceEvent(.geofenceExit, placeId: place, hour: 10)
+        let last = geofenceEvent(.geofenceExit, placeId: place, hour: 13)
+        let next = geofenceEvent(.geofenceEnter, placeId: place, hour: 14)
+        let nextExit = geofenceEvent(.geofenceExit, placeId: place, hour: 16)
+        let events = [first, repeated, exit, last, next, nextExit]
+        var sessions: [ActivitySession] = []
+        for index in events.indices {
+            sessions = engine.reconcile(events: Array(events.prefix(index + 1)), existingSessions: sessions,
+                                        now: events[index].timestamp).sessions
+        }
+        XCTAssertEqual(sessions.count, 2)
+        XCTAssertEqual(sessions.first { $0.startEventId == first.id }?.startAt, first.timestamp)
+        XCTAssertEqual(sessions.first { $0.startEventId == first.id }?.endAt, last.timestamp)
+        XCTAssertEqual(sessions.first { $0.startEventId == first.id }?.duration, 5 * 3600)
+        XCTAssertEqual(repeated.disposition, .redundant)
+        XCTAssertEqual(exit.disposition, .redundant)
+        let replay = engine.reconcile(events: events.reversed(), existingSessions: sessions,
+                                      now: date(day: 1, hour: 17))
+        XCTAssertEqual(replay.sessions.count, 2)
+        XCTAssertEqual(replay.sessions.first { $0.startEventId == first.id }?.endEventId, last.id)
+    }
+
+    func testRepeatedEntryAcrossDaysKeepsFirstEntry() {
+        let place = UUID()
+        let first = geofenceEvent(.geofenceEnter, placeId: place, hour: 8)
+        let repeated = geofenceEvent(.geofenceEnter, placeId: place, hour: 9)
+        repeated.timestamp = date(day: 2, hour: 9)
+        let exit = geofenceEvent(.geofenceExit, placeId: place, hour: 10)
+        exit.timestamp = date(day: 2, hour: 10)
+        let result = engine.reconcile(events: [first, repeated, exit], existingSessions: [], now: exit.timestamp)
+        XCTAssertEqual(result.sessions.count, 1)
+        XCTAssertEqual(result.sessions.first?.startAt, first.timestamp)
+        XCTAssertEqual(result.sessions.first?.endAt, exit.timestamp)
+        XCTAssertEqual(repeated.disposition, .redundant)
+    }
+
+    func testLaterExitDoesNotOverwriteManualCorrection() {
+        let place = UUID()
+        let first = geofenceEvent(.geofenceEnter, placeId: place, hour: 8)
+        let exit = geofenceEvent(.geofenceExit, placeId: place, hour: 10)
+        let original = engine.reconcile(events: [first, exit], existingSessions: [], now: exit.timestamp)
+        let session = original.sessions[0]
+        let correction = adjustment(session, start: first.timestamp, end: date(day: 1, hour: 9), hour: 11)
+        let repeated = geofenceEvent(.geofenceExit, placeId: place, hour: 12)
+        let events = [first, exit, correction, repeated]
+        for _ in 0..<2 {
+            _ = engine.reconcile(events: events, existingSessions: original.sessions, now: repeated.timestamp)
+            XCTAssertEqual(session.endAt, date(day: 1, hour: 9))
+            XCTAssertEqual(repeated.disposition, .redundant)
+        }
     }
 
     func testEachGeofencePairsOnlyWithItsOwnExit() {
@@ -140,15 +199,15 @@ final class ActivitySessionEngineTests: XCTestCase {
         XCTAssertNil(result.sessions[0].endAt)
     }
 
-    func testExitAfter24HoursIsOrphanedAndDoesNotInventAnEnd() {
+    func testExitAfter24HoursClosesTheOriginalEntry() {
         let start = event(.geofenceEnter, 9)
         let lateExit = ActivityEvent(activityId: activityId, eventType: .geofenceExit,
                                      timestamp: date(day: 2, hour: 10), source: .coreLocation)
         let result = engine.reconcile(events: [start, lateExit], existingSessions: [],
                                       now: date(day: 2, hour: 11))
-        XCTAssertEqual(result.sessions[0].status, .incomplete)
-        XCTAssertNil(result.sessions[0].endAt)
-        XCTAssertEqual(lateExit.disposition, .orphaned)
+        XCTAssertEqual(result.sessions[0].status, .completed)
+        XCTAssertEqual(result.sessions[0].endAt, lateExit.timestamp)
+        XCTAssertEqual(lateExit.disposition, .applied)
     }
 
     func testManualSessionIsManuallyAdjusted() {

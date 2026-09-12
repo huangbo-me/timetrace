@@ -46,11 +46,17 @@ struct PlaceActivitySummary: Identifiable {
 enum PlaceSessionFilter: Equatable {
     case all
     case place(UUID?)
+    case placeType(PlaceType, triggerIDs: Set<UUID>)
+
+    static func forType(_ type: PlaceType, places: [ActivityTrigger]) -> Self {
+        .placeType(type, triggerIDs: Set(places.filter { $0.placeType == type }.map(\.id)))
+    }
 
     func includes(_ session: ActivitySession) -> Bool {
         switch self {
         case .all: true
         case .place(let triggerId): session.placeTriggerId == triggerId
+        case .placeType(_, let triggerIDs): session.placeTriggerId.map { triggerIDs.contains($0) } ?? false
         }
     }
 }
@@ -73,7 +79,7 @@ struct AnalyticsService: AnalyticsServicing {
                         calendar: Calendar) -> [DailyActivitySummary] {
         let relevant = sessions.filter { session in
             session.deletedAt == nil && (activityId == nil || session.activityId == activityId) &&
-            interval.contains(session.startAt)
+            session.startAt >= interval.start && session.startAt < interval.end
         }
         let grouped = Dictionary(grouping: relevant) { calendar.startOfDay(for: $0.startAt) }
         return grouped.keys.sorted().map { day in
@@ -93,7 +99,7 @@ struct AnalyticsService: AnalyticsServicing {
 
     func placeSummaries(sessions: [ActivitySession], activityId: UUID?, interval: DateInterval) -> [PlaceActivitySummary] {
         let relevant = sessions.filter {
-            $0.deletedAt == nil && (activityId == nil || $0.activityId == activityId) && interval.contains($0.startAt)
+            $0.deletedAt == nil && (activityId == nil || $0.activityId == activityId) && $0.startAt >= interval.start && $0.startAt < interval.end
         }
         return Dictionary(grouping: relevant, by: \.placeTriggerId)
             .map { placeTriggerId, values in

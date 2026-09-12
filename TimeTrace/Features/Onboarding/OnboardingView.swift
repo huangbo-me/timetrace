@@ -3,6 +3,8 @@ import MapKit
 import SwiftUI
 
 struct OnboardingView: View {
+    @Environment(\.timeTraceDesign) private var design
+
     @EnvironmentObject private var store: OnboardingFeatureStore
     @State private var coordinate = CLLocationCoordinate2D(latitude: 31.2304, longitude: 121.4737)
     @State private var position: MapCameraPosition = .camera(
@@ -33,7 +35,7 @@ struct OnboardingView: View {
                         TimeTraceMark(size: 54)
                         VStack(alignment: .leading, spacing: 3) {
                             Text("时迹").font(.title2.weight(.bold))
-                            Text("让工作时间，自动留下痕迹").font(.subheadline).foregroundStyle(TimeTraceDesign.muted)
+                            Text("让工作时间，自动留下痕迹").font(.subheadline).foregroundStyle(design.muted)
                         }
                     }
                     .padding(.vertical, 8)
@@ -62,7 +64,7 @@ struct OnboardingView: View {
                     Slider(value: $radius, in: 10...1000, step: 10)
                     Text("拖动滑块时，地图会即时更新围栏范围。建议至少设为 100 米。")
                         .font(.caption)
-                        .foregroundStyle(TimeTraceDesign.muted)
+                        .foregroundStyle(design.muted)
                     Text("地图仅用于落点微调：轻点地图设定地点，或拖动红色图钉。上下滑动可继续浏览配置。")
                         .font(.footnote)
                         .foregroundStyle(.secondary)
@@ -109,7 +111,8 @@ struct OnboardingView: View {
                 }
             }
             .scrollContentBackground(.hidden)
-            .background(TimeTraceDesign.canvas)
+            .timeTraceScreen()
+            .background(design.canvas)
             .navigationTitle("欢迎使用")
             .onAppear {
                 if model.geofence.authorizationStatus == .notDetermined {
@@ -159,7 +162,7 @@ struct WeekdayPicker: View {
                     let bit = weekday - 1
                     if selected { mask &= ~(1 << bit) } else { mask |= 1 << bit }
                 }
-                .buttonStyle(.bordered)
+                .buttonStyle(.glass)
                 .tint(selected ? .accentColor : .gray)
                 .frame(maxWidth: .infinity)
             }
@@ -292,6 +295,8 @@ private struct WorkplaceSearchResult: Identifiable {
 }
 
 struct WorkplaceAddressSearch: View {
+    @Environment(\.timeTraceDesign) private var design
+
     @EnvironmentObject private var store: OnboardingFeatureStore
     @Binding var coordinate: CLLocationCoordinate2D
     @Binding var position: MapCameraPosition
@@ -312,7 +317,7 @@ struct WorkplaceAddressSearch: View {
         VStack(alignment: .leading, spacing: 10) {
             HStack(spacing: 8) {
                 Image(systemName: "location.fill")
-                    .foregroundStyle(TimeTraceDesign.blue)
+                    .foregroundStyle(design.blue)
                 Text(city.isEmpty ? (isDeterminingCity ? "正在确定当前城市…" : "尚未确定搜索城市") : "搜索城市：\(city)")
                     .font(.subheadline.weight(.medium))
                 Spacer()
@@ -346,7 +351,8 @@ struct WorkplaceAddressSearch: View {
                         Image(systemName: "magnifyingglass")
                     }
                 }
-                .buttonStyle(.borderedProminent)
+                .buttonStyle(.glassProminent)
+                .foregroundStyle(design.onAccent)
                 .disabled(isSearching || isDeterminingCity || searchOrigin == nil || query.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
                 .accessibilityLabel("搜索地址")
             }

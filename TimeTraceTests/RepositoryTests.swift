@@ -1,11 +1,115 @@
 import CoreLocation
 import SwiftData
 import XCTest
-import UserNotifications
+// Exercise the ObjC delegate on its background callback queue; the SDK's
+// immutable notification objects do not carry Swift Sendable annotations.
+@preconcurrency import UserNotifications
 @testable import TimeTrace
+
+// UserNotifications exposes these values through NSSecureCoding, without public
+// constructors. Keep the system objects in delegate tests, including ObjC bridging.
+private final class NotificationFixtureCoder: NSCoder {
+    private let values: [String: Any]
+    init(_ values: [String: Any]) { self.values = values; super.init() }
+    override var allowsKeyedCoding: Bool { true }
+    override func containsValue(forKey key: String) -> Bool { values[key] != nil }
+    override func decodeObject(forKey key: String) -> Any? { values[key] }
+}
 
 @MainActor
 final class RepositoryTests: XCTestCase {
+    func testReminderNotificationCallbacksCompleteBeforeDeliveringActions() async throws {
+        let definitionID = UUID()
+        let date = Date(timeIntervalSince1970: 123456)
+        let content = UNMutableNotificationContent()
+        content.userInfo = ["definitionId": definitionID.uuidString]
+        let request = UNNotificationRequest(identifier: "timetrace.reminder.test", content: content, trigger: nil)
+        let notification = try XCTUnwrap(UNNotification(coder: NotificationFixtureCoder([
+            "request": request, "date": date
+        ])))
+        let cases: [(String?, String)] = [
+            (nil, "delivered"),
+            (UNNotificationDefaultActionIdentifier, "start"),
+            (LocalNotificationService.startIdentifier, "start"),
+            (LocalNotificationService.snoozeIdentifier, "snooze"),
+            (LocalNotificationService.skipIdentifier, "skip"),
+            (UNNotificationDismissActionIdentifier, "dismissed")
+        ]
+        for (identifier, expectedKind) in cases {
+            let service = LocalNotificationService()
+            let completed = expectation(description: "完成 \(expectedKind)")
+            let delivered = expectation(description: "处理 \(expectedKind)")
+            completed.assertForOverFulfill = true
+            delivered.assertForOverFulfill = true
+            var completionReturned = false
+            service.onAction = { action in
+                XCTAssertTrue(Thread.isMainThread)
+                XCTAssertTrue(completionReturned)
+                let kind: String
+                let id: UUID
+                let occurrence: String
+                switch action {
+                case let .delivered(value, request): (kind, id, occurrence) = ("delivered", value, request)
+                case let .start(value, request): (kind, id, occurrence) = ("start", value, request)
+                case let .snooze(value, request): (kind, id, occurrence) = ("snooze", value, request)
+                case let .skip(value, request): (kind, id, occurrence) = ("skip", value, request)
+                case let .dismissed(value, request): (kind, id, occurrence) = ("dismissed", value, request)
+                }
+                XCTAssertEqual(kind, expectedKind)
+                XCTAssertEqual(id, definitionID)
+                XCTAssertEqual(occurrence, ReminderOccurrence.identifier(requestID: request.identifier, deliveredAt: date))
+                delivered.fulfill()
+            }
+            let center = UNUserNotificationCenter.current()
+            let completion = {
+                XCTAssertTrue(Thread.isMainThread)
+                completionReturned = true
+                completed.fulfill()
+            }
+            let response = try XCTUnwrap(UNNotificationResponse(coder: NotificationFixtureCoder([
+                "notification": notification, "actionIdentifier": identifier ?? UNNotificationDefaultActionIdentifier
+            ])))
+            DispatchQueue.global().async {
+                let delegate: UNUserNotificationCenterDelegate = service
+                if identifier != nil {
+                    delegate.userNotificationCenter?(center, didReceive: response, withCompletionHandler: completion)
+                } else {
+                    delegate.userNotificationCenter?(center, willPresent: notification, withCompletionHandler: { options in
+                        XCTAssertEqual(options, [.banner, .sound])
+                        completion()
+                    })
+                }
+            }
+            await fulfillment(of: [completed, delivered], timeout: 3, enforceOrder: true)
+        }
+    }
+
+    func testGeofenceNotificationResponseCompletesOnMainThread() async throws {
+        let content = UNMutableNotificationContent()
+        content.title = "已进入公司"
+        let request = UNNotificationRequest(identifier: "timetrace.geofence.test", content: content, trigger: nil)
+        let notification = try XCTUnwrap(UNNotification(coder: NotificationFixtureCoder([
+            "request": request, "date": Date()
+        ])))
+        let response = try XCTUnwrap(UNNotificationResponse(coder: NotificationFixtureCoder([
+            "notification": notification, "actionIdentifier": UNNotificationDefaultActionIdentifier
+        ])))
+        XCTAssertEqual(response.notification.request.identifier, request.identifier)
+        let service = LocalNotificationService()
+        service.onAction = { _ in XCTFail("围栏通知不应触发提醒动作") }
+        let completed = expectation(description: "系统通知完成回调")
+        completed.assertForOverFulfill = true
+        let center = UNUserNotificationCenter.current()
+        DispatchQueue.global().async {
+            let delegate: UNUserNotificationCenterDelegate = service
+            delegate.userNotificationCenter?(center, didReceive: response, withCompletionHandler: {
+                XCTAssertTrue(Thread.isMainThread, "UIKit 状态恢复的完成回调必须在主线程执行")
+                completed.fulfill()
+            })
+        }
+        await fulfillment(of: [completed], timeout: 3)
+    }
+
     func testBackupMergeKeepsBothWorkLibrariesVisibleRegardlessOfCreationOrder() throws {
         for importedIsOlder in [true, false] {
             let sourceGeofence = FakeGeofenceService()
@@ -60,7 +164,7 @@ final class RepositoryTests: XCTestCase {
                 targetGeofence.emit(.exited(triggerId: id, timestamp: start.addingTimeInterval(12_000)))
                 targetGeofence.emit(.entered(triggerId: id, timestamp: Date().addingTimeInterval(-60)))
             }
-            XCTAssertEqual(target.orphanedWorkExitEvents.count, 2)
+            XCTAssertTrue(target.orphanedWorkExitEvents.isEmpty)
             XCTAssertEqual(target.workSessions.filter { $0.endAt == nil }.count, 2)
             let allSessionIDs = Set(target.sessions.map(\.id))
             // Both imported and local places must remain manageable after merging.
@@ -560,6 +664,73 @@ final class RepositoryTests: XCTestCase {
         XCTAssertEqual(notifications.geofenceTransitions.map(\.placeName), ["创意园", "创意园"])
     }
 
+    func testOfficeToHomeKeepsHomeTimerAndPairsTheHomeDeparture() throws {
+        let geofence = FakeGeofenceService()
+        let model = AppModel(inMemory: true, geofence: geofence,
+                             notifications: FakeNotificationService())
+        model.load()
+        model.finishOnboarding(latitude: 31.2, longitude: 121.4, radius: 200,
+                               weekdaysMask: 0b1111111, normalStartMinute: nil, normalEndMinute: nil,
+                               placeName: "公司")
+        let office = try XCTUnwrap(model.workTrigger)
+        model.addWorkplace(latitude: 31.3, longitude: 121.5, radius: 200,
+                           placeName: "家", placeType: .home)
+        let home = try XCTUnwrap(model.workTriggers.first { $0.placeType == .home })
+        let now = Date()
+        geofence.emit(.entered(triggerId: office.id, timestamp: now.addingTimeInterval(-10_800)))
+        geofence.emit(.exited(triggerId: office.id, timestamp: now.addingTimeInterval(-7_200)))
+        geofence.emit(.entered(triggerId: home.id, timestamp: now.addingTimeInterval(-3_600)))
+
+        let homeSession = try XCTUnwrap(model.workSessions.first { $0.placeTriggerId == home.id })
+        XCTAssertEqual(homeSession.status, .active)
+        XCTAssertNil(homeSession.endAt)
+        let work = TodayWorkSummary(sessions: model.workSessions, places: model.triggers,
+                                    workActivityIDs: model.workActivityIDs)
+        XCTAssertEqual(work.duration(now: now), 3_600)
+        XCTAssertEqual(work.duration(now: now.addingTimeInterval(60)), 3_600,
+                       "居家记录进行中时，工作累计保持不变")
+
+        geofence.emit(.exited(triggerId: home.id, timestamp: now))
+        XCTAssertEqual(homeSession.status, .completed)
+        XCTAssertEqual(homeSession.duration, 3_600)
+        XCTAssertTrue(model.orphanedWorkExitEvents.isEmpty)
+        XCTAssertEqual(model.workSessions.count, 2)
+    }
+
+    func testHomeDepartureRepeatedAfterFifteenSecondsDoesNotCreateMissingArrival() throws {
+        let geofence = FakeGeofenceService()
+        let model = AppModel(inMemory: true, geofence: geofence,
+                             notifications: FakeNotificationService())
+        model.load()
+        model.finishOnboarding(latitude: 31.2, longitude: 121.4, radius: 200,
+                               weekdaysMask: 0b1111111, normalStartMinute: nil, normalEndMinute: nil)
+        model.addWorkplace(latitude: 31.3, longitude: 121.5, radius: 200,
+                           placeName: "家", placeType: .home)
+        let home = try XCTUnwrap(model.workTriggers.first { $0.placeType == .home })
+        let departure = Date().addingTimeInterval(-60)
+        geofence.emit(.entered(triggerId: home.id, timestamp: departure.addingTimeInterval(-27_940)))
+        geofence.emit(.exited(triggerId: home.id, timestamp: departure))
+        geofence.emit(.exited(triggerId: home.id, timestamp: departure.addingTimeInterval(15)))
+        XCTAssertEqual(model.workSessions.count, 1)
+        XCTAssertEqual(model.workSessions.first?.endAt, departure.addingTimeInterval(15))
+        XCTAssertTrue(model.orphanedWorkExitEvents.isEmpty)
+        XCTAssertEqual(model.events.last?.disposition, .applied)
+        let duplicate = try XCTUnwrap(model.events.last)
+        duplicate.disposition = .orphaned
+        model.refreshSyncedData()
+        XCTAssertTrue(model.orphanedWorkExitEvents.isEmpty, "同步刷新应修复旧版本的错误标记")
+        XCTAssertEqual(duplicate.disposition, .applied)
+
+        // A real second visit inside the duplicate window must still pair.
+        geofence.emit(.entered(triggerId: home.id, timestamp: departure.addingTimeInterval(20)))
+        geofence.emit(.exited(triggerId: home.id, timestamp: departure.addingTimeInterval(25)))
+        XCTAssertEqual(model.workSessions.count, 2)
+        XCTAssertEqual(model.workSessions.last?.duration, 5)
+        geofence.emit(.exited(triggerId: home.id, timestamp: departure.addingTimeInterval(56)))
+        XCTAssertTrue(model.orphanedWorkExitEvents.isEmpty)
+        XCTAssertEqual(model.workSessions.last?.endAt, departure.addingTimeInterval(56))
+    }
+
     func testOrphanedExitCanBeRepairedWithManualArrival() throws {
         let geofence = FakeGeofenceService()
         let model = AppModel(inMemory: true, geofence: geofence,
@@ -690,7 +861,7 @@ final class RepositoryTests: XCTestCase {
 
         model.refreshSyncedData()
 
-        XCTAssertEqual(duplicate.disposition, .redundant)
+        XCTAssertEqual(duplicate.disposition, .applied)
         XCTAssertTrue(model.orphanedWorkExitEvents.isEmpty)
     }
 
@@ -712,7 +883,7 @@ final class RepositoryTests: XCTestCase {
 
         model.refreshSyncedData()
 
-        XCTAssertEqual(duplicate.disposition, .redundant)
+        XCTAssertEqual(duplicate.disposition, .applied)
         XCTAssertTrue(model.orphanedWorkExitEvents.isEmpty)
     }
 

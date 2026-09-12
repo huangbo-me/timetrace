@@ -1,8 +1,16 @@
 import SwiftUI
 
 struct RootView: View {
+    @Environment(\.timeTraceDesign) private var design
+
     @EnvironmentObject private var store: RootStore
-    @State private var selectedTab = ProcessInfo.processInfo.arguments.contains("--history-validation") ? "history" : "today"
+    @State private var selectedTab: String = {
+#if DEBUG
+        if ProcessInfo.processInfo.arguments.contains("--settings-validation") { return "settings" }
+        if ProcessInfo.processInfo.arguments.contains("--insights-validation") { return "insights" }
+#endif
+        return ProcessInfo.processInfo.arguments.contains("--history-validation") ? "history" : "today"
+    }()
 
     var body: some View {
         let state = store.state
@@ -49,10 +57,8 @@ struct RootView: View {
                             Text("设置")
                         }
                 }
-                .tint(TimeTraceDesign.blue)
-                .background(TimeTraceDesign.canvas)
-                .toolbarBackground(TimeTraceDesign.canvas, for: .tabBar)
-                .toolbarBackground(.visible, for: .tabBar)
+                .tint(design.blue)
+                .background(design.canvas)
                 .ignoresSafeArea(edges: [.top, .bottom])
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
             }
@@ -69,6 +75,8 @@ struct RootView: View {
 }
 
 private struct InitialCloudRestoreDecisionView: View {
+    @Environment(\.timeTraceDesign) private var design
+
     let onRestore: () -> Void
     let onStartNew: () -> Void
 
@@ -81,7 +89,7 @@ private struct InitialCloudRestoreDecisionView: View {
                     .font(.title2.weight(.bold))
                 Text("已接入 iCloud。你可以恢复已有的时迹数据，也可以开启新记录。")
                     .font(.subheadline)
-                    .foregroundStyle(TimeTraceDesign.muted)
+                    .foregroundStyle(design.muted)
                     .multilineTextAlignment(.center)
             }
 
@@ -91,7 +99,7 @@ private struct InitialCloudRestoreDecisionView: View {
                         .font(.subheadline.weight(.medium))
                     Text("网络较慢时，恢复可能需要更长时间。")
                         .font(.caption)
-                        .foregroundStyle(TimeTraceDesign.muted)
+                        .foregroundStyle(design.muted)
                 }
             }
 
@@ -100,20 +108,21 @@ private struct InitialCloudRestoreDecisionView: View {
                     Label("从 iCloud 恢复", systemImage: "arrow.clockwise.icloud")
                         .frame(maxWidth: .infinity)
                 }
-                .buttonStyle(.borderedProminent)
-                .tint(TimeTraceDesign.blue)
+                .buttonStyle(.glassProminent)
+                            .foregroundStyle(design.onAccent)
+                .tint(design.blue)
 
                 Button(action: onStartNew) {
                     Text("开启新记录")
                         .frame(maxWidth: .infinity)
                 }
-                .buttonStyle(.bordered)
-                .tint(TimeTraceDesign.ink)
+                .buttonStyle(.glass)
+                .tint(design.ink)
             }
 
             Text("开始新记录不会删除 iCloud 数据；若旧数据稍后抵达，会自动合并回来。")
                 .font(.caption)
-                .foregroundStyle(TimeTraceDesign.muted)
+                .foregroundStyle(design.muted)
             Spacer()
         }
         .padding(.horizontal, 28)

@@ -2,36 +2,96 @@ import CoreLocation
 import SwiftUI
 import UIKit
 
-enum TimeTraceDesign {
-    /// Historical name retained for existing call sites; visually this is the app's muted bronze tint.
-    static let blue = adaptive(light: .init(red: 0.58, green: 0.43, blue: 0.27, alpha: 1),
-                               dark: .init(red: 0.76, green: 0.59, blue: 0.39, alpha: 1))
-    static let violet = adaptive(light: .init(red: 0.08, green: 0.17, blue: 0.14, alpha: 1),
-                                 dark: .init(red: 0.19, green: 0.33, blue: 0.27, alpha: 1))
-    static let ink = adaptive(light: .init(red: 0.07, green: 0.10, blue: 0.085, alpha: 1),
-                              dark: .init(red: 0.94, green: 0.92, blue: 0.86, alpha: 1))
-    static let muted = adaptive(light: .init(red: 0.39, green: 0.40, blue: 0.36, alpha: 1),
-                                dark: .init(red: 0.67, green: 0.68, blue: 0.62, alpha: 1))
-    static let canvas = adaptive(light: .init(red: 0.965, green: 0.955, blue: 0.93, alpha: 1),
-                                 dark: .init(red: 0.045, green: 0.06, blue: 0.052, alpha: 1))
-    static let card = adaptive(light: .white,
-                               dark: .init(red: 0.095, green: 0.12, blue: 0.105, alpha: 1))
-    static let border = adaptive(light: .init(red: 0.87, green: 0.84, blue: 0.78, alpha: 1),
-                                 dark: .init(red: 0.20, green: 0.25, blue: 0.215, alpha: 1))
-    static let shadow = adaptive(light: .init(red: 0.13, green: 0.16, blue: 0.12, alpha: 1),
-                                 dark: .black)
-    static let heroGradient = LinearGradient(
-        colors: [blue, violet], startPoint: .topLeading, endPoint: .bottomTrailing
-    )
+enum AppTheme: String, CaseIterable, Identifiable {
+    case paper, sage, sky, lavender, rose
+    var id: String { rawValue }
+    var alternateIconName: String? {
+        switch self {
+        case .paper: nil
+        case .sage: "AppIconSage"
+        case .sky: "AppIconSky"
+        case .lavender: "AppIconLavender"
+        case .rose: "AppIconRose"
+        }
+    }
+    var title: String {
+        switch self { case .paper: "暖砂"; case .sage: "森林"; case .sky: "晴空"; case .lavender: "暮紫"; case .rose: "蔷薇" }
+    }
+    // canvas, card, ink, secondary ink, accent, border, gradient end
+    var lightColors: [UInt32] {
+        switch self {
+        case .paper: [0xFAF5ED, 0xFFFCF7, 0x352B25, 0x665348, 0x875137, 0xDDCBB7, 0x493A2B]
+        case .sage: [0xF0F5EE, 0xFAFDF8, 0x25372B, 0x4C6251, 0x356448, 0xC8DAC8, 0x253F30]
+        case .sky: [0xEEF5FB, 0xFAFCFF, 0x263749, 0x4F6378, 0x365F87, 0xC9D8E8, 0x263D5B]
+        case .lavender: [0xF5F0FA, 0xFDFAFF, 0x372D46, 0x625471, 0x70518B, 0xDACCE8, 0x42314F]
+        case .rose: [0xFCF0F2, 0xFFFAFB, 0x442D34, 0x74535D, 0x89475D, 0xE8CBD3, 0x522D3A]
+        }
+    }
+    var darkColors: [UInt32] {
+        switch self {
+        case .paper: [0x181410, 0x272019, 0xF8EEE2, 0xCEBDA9, 0xEDB887, 0x594737, 0x493A2B]
+        case .sage: [0x101913, 0x1C2A21, 0xEBF5EA, 0xB2CCB6, 0x9AD5AC, 0x3B5944, 0x253F30]
+        case .sky: [0x111820, 0x1D2935, 0xEAF2FC, 0xB5C9DF, 0x9ECBF5, 0x3B526C, 0x263D5B]
+        case .lavender: [0x19131F, 0x2A2034, 0xF4ECFC, 0xCDBBDD, 0xD4AFF3, 0x554264, 0x42314F]
+        case .rose: [0x201318, 0x322129, 0xFCECF0, 0xDCBBC6, 0xF2ACC2, 0x63404D, 0x522D3A]
+        }
+    }
+}
 
-    private static func adaptive(light: UIColor, dark: UIColor) -> Color {
-        Color(uiColor: UIColor { traits in
-            traits.userInterfaceStyle == .dark ? dark : light
-        })
+enum AppAppearance: String, CaseIterable, Identifiable {
+    case system, light, dark
+    var id: String { rawValue }
+    var title: String {
+        switch self { case .system: "跟随系统"; case .light: "浅色"; case .dark: "深色" }
+    }
+    var colorScheme: ColorScheme? {
+        switch self { case .system: nil; case .light: .light; case .dark: .dark }
+    }
+}
+
+struct TimeTraceDesign {
+    var theme: AppTheme = .paper
+    private func color(_ index: Int) -> Color {
+        let light = Self.uiColor(theme.lightColors[index])
+        let dark = Self.uiColor(theme.darkColors[index])
+        return Color(uiColor: UIColor { $0.userInterfaceStyle == .dark ? dark : light })
+    }
+    static func uiColor(_ rgb: UInt32) -> UIColor {
+        UIColor(red: CGFloat((rgb >> 16) & 255) / 255, green: CGFloat((rgb >> 8) & 255) / 255,
+                blue: CGFloat(rgb & 255) / 255, alpha: 1)
+    }
+    var onAccent: Color {
+        Color(uiColor: UIColor { $0.userInterfaceStyle == .dark ? Self.uiColor(0x181818) : .white })
+    }
+    var blue: Color { color(4) }
+    var violet: Color { color(4) }
+    var ink: Color { color(2) }
+    var muted: Color { color(3) }
+    var canvas: Color { color(0) }
+    var card: Color { color(1) }
+    var border: Color { color(5) }
+    var shadow: Color { .black }
+    // The hero uses white text in both appearances, so its colors remain dark.
+    var heroGradient: LinearGradient {
+        LinearGradient(colors: [Color(uiColor: Self.uiColor(theme.lightColors[4])),
+                                Color(uiColor: Self.uiColor(theme.lightColors[6]))],
+                       startPoint: .topLeading, endPoint: .bottomTrailing)
+    }
+}
+
+private struct TimeTraceDesignKey: EnvironmentKey {
+    static let defaultValue = TimeTraceDesign()
+}
+extension EnvironmentValues {
+    var timeTraceDesign: TimeTraceDesign {
+        get { self[TimeTraceDesignKey.self] }
+        set { self[TimeTraceDesignKey.self] = newValue }
     }
 }
 
 struct TimeTraceMark: View {
+    @Environment(\.timeTraceDesign) private var design
+
     var size: CGFloat = 48
 
     var body: some View {
@@ -40,7 +100,7 @@ struct TimeTraceMark: View {
             .scaledToFit()
             .clipShape(RoundedRectangle(cornerRadius: size * 0.225, style: .continuous))
         .frame(width: size, height: size)
-        .shadow(color: TimeTraceDesign.violet.opacity(0.22), radius: 12, y: 6)
+        .shadow(color: design.violet.opacity(0.22), radius: 12, y: 6)
     }
 }
 
@@ -51,21 +111,19 @@ struct TTCard<Content: View>: View {
     var body: some View {
         content
             .padding(16)
-            .background(TimeTraceDesign.card, in: RoundedRectangle(cornerRadius: 20, style: .continuous))
-            .overlay {
-                RoundedRectangle(cornerRadius: 20, style: .continuous)
-                    .stroke(TimeTraceDesign.border, lineWidth: 1)
-            }
-            .shadow(color: TimeTraceDesign.shadow.opacity(0.15), radius: 12, y: 5)
+            .timeTraceCardSurface()
     }
 }
 
 struct TTIcon: View {
+    @Environment(\.timeTraceDesign) private var design
+
     let systemName: String
-    var tint: Color = TimeTraceDesign.blue
+    var tint: Color? = nil
     var size: CGFloat = 38
 
     var body: some View {
+        let tint = tint ?? design.blue
         Image(systemName: systemName)
             .font(.system(size: size * 0.42, weight: .semibold))
             .foregroundStyle(tint)
@@ -75,18 +133,20 @@ struct TTIcon: View {
 }
 
 struct TTSectionTitle: View {
+    @Environment(\.timeTraceDesign) private var design
+
     let title: String
     var action: String?
     var onAction: (() -> Void)?
 
     var body: some View {
         HStack {
-            Text(title).font(.headline.weight(.bold)).foregroundStyle(TimeTraceDesign.ink)
+            Text(title).font(.headline.weight(.bold)).foregroundStyle(design.ink)
             Spacer()
             if let action, let onAction {
                 Button(action, action: onAction)
                     .font(.subheadline.weight(.medium))
-                    .foregroundStyle(TimeTraceDesign.blue)
+                    .foregroundStyle(design.blue)
             }
         }
     }
@@ -145,10 +205,13 @@ struct TTCapabilityNotice: View {
 }
 
 extension View {
+    /// Content uses a quiet material; native Liquid Glass is reserved for controls.
+    func timeTraceCardSurface(cornerRadius: CGFloat = 20) -> some View {
+        modifier(TimeTraceCardSurface(cornerRadius: cornerRadius))
+    }
+
     func timeTraceScreen() -> some View {
-        self
-            .foregroundStyle(TimeTraceDesign.ink)
-            .background(TimeTraceDesign.canvas.ignoresSafeArea())
+        modifier(TimeTraceScreenModifier())
     }
 
     /// Uses iOS's native large-title behavior: the title is large at the
@@ -157,5 +220,69 @@ extension View {
         self
             .navigationTitle(title)
             .toolbarTitleDisplayMode(.large)
+    }
+}
+
+private struct TimeTraceScreenModifier: ViewModifier {
+    @Environment(\.timeTraceDesign) private var design
+    func body(content: Content) -> some View {
+        content.foregroundStyle(design.ink)
+            .background { TimeTraceBackdrop() }
+    }
+}
+
+private struct TimeTraceCardSurface: ViewModifier {
+    @Environment(\.timeTraceDesign) private var design
+    @Environment(\.colorScheme) private var colorScheme
+    @Environment(\.accessibilityReduceTransparency) private var reduceTransparency
+    @Environment(\.colorSchemeContrast) private var contrast
+    let cornerRadius: CGFloat
+
+    func body(content: Content) -> some View {
+        let shape = RoundedRectangle(cornerRadius: cornerRadius, style: .continuous)
+        content
+            .background {
+                if reduceTransparency || contrast == .increased {
+                    shape.fill(design.card)
+                } else {
+                    shape.fill(.regularMaterial)
+                    shape.fill(design.card.opacity(colorScheme == .dark ? 0.32 : 0.46))
+                }
+            }
+            .overlay {
+                shape.strokeBorder(
+                    LinearGradient(
+                        colors: [design.card.opacity(0.85), design.border.opacity(contrast == .increased ? 1 : 0.4)],
+                        startPoint: .topLeading, endPoint: .bottomTrailing
+                    ), lineWidth: 1
+                )
+                .allowsHitTesting(false)
+            }
+            .shadow(color: design.shadow.opacity(colorScheme == .dark ? 0.12 : 0.045), radius: 14, y: 6)
+    }
+}
+
+/// Static, theme-aware light gives translucent surfaces depth without motion.
+private struct TimeTraceBackdrop: View {
+    @Environment(\.timeTraceDesign) private var design
+    @Environment(\.accessibilityReduceTransparency) private var reduceTransparency
+
+    var body: some View {
+        design.canvas
+            .overlay {
+                if !reduceTransparency {
+                    GeometryReader { geometry in
+                        RadialGradient(colors: [design.blue.opacity(0.14), .clear],
+                                       center: .topTrailing, startRadius: 0,
+                                       endRadius: max(geometry.size.width, 1))
+                        RadialGradient(colors: [design.card.opacity(0.7), .clear],
+                                       center: .bottomLeading, startRadius: 0,
+                                       endRadius: max(geometry.size.height * 0.65, 1))
+                    }
+                }
+            }
+            .ignoresSafeArea()
+            .allowsHitTesting(false)
+            .accessibilityHidden(true)
     }
 }

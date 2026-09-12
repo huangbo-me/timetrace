@@ -8,12 +8,6 @@ struct SessionEngineResult {
 
 struct ActivitySessionEngine {
     static let staleInterval: TimeInterval = 24 * 60 * 60
-    /// Core Location can deliver the same region exit more than once while it
-    /// is settling a boundary transition.  Only treat an immediately repeated
-    /// exit as a duplicate; a later exit without a matching arrival remains a
-    /// repairable anomaly.
-    static let duplicateGeofenceExitInterval: TimeInterval = 5
-
     private enum Active {
         case automatic(ActivitySession, ActivityEvent, allowsExtendedDuration: Bool)
         case preserved(ActivitySession)
@@ -90,7 +84,7 @@ struct ActivitySessionEngine {
         var activeByPlace: [UUID: Active] = [:]
         var activeWithoutPlace: Active?
         var pendingPreservedExit: [UUID?: ActivitySession] = [:]
-        var latestAppliedExitByPlace: [UUID: Date] = [:]
+        var lastClosedByPlace: [UUID?: ActivitySession] = [:]
         var created: [ActivitySession] = []
 
         for event in ordered {
@@ -100,6 +94,7 @@ struct ActivitySessionEngine {
             }
 
             if let preservedSession = preservedByStart[event.id] {
+                lastClosedByPlace[preservedSession.placeTriggerId] = nil
                 event.disposition = .applied
                 pendingPreservedExit[preservedSession.placeTriggerId] = preservedSession.endEventId == nil ? preservedSession : nil
                 if let placeId = preservedSession.placeTriggerId {
@@ -117,7 +112,7 @@ struct ActivitySessionEngine {
                         if case .preserved(let active) = activeByPlace[placeId], active.id == preservedSession.id {
                             activeByPlace[placeId] = nil
                         }
-                        latestAppliedExitByPlace[placeId] = event.timestamp
+                        lastClosedByPlace[placeId] = preservedSession
                     } else if case .preserved(let active) = activeWithoutPlace, active.id == preservedSession.id {
                         activeWithoutPlace = nil
                     }
@@ -134,6 +129,7 @@ struct ActivitySessionEngine {
                     continue
                 }
                 pendingPreservedExit[placeId] = nil
+                lastClosedByPlace[placeId] = nil
                 let isManual = event.eventType == .manualStart || event.source == .user
                 let allowsExtendedDuration = allowsExtendedDuration(for: event)
                 let session: ActivitySession
@@ -181,17 +177,25 @@ struct ActivitySessionEngine {
                     if let corrected = pendingPreservedExit.removeValue(forKey: placeId) {
                         corrected.endEventId = event.id
                         event.disposition = .applied
-                        if let placeId { latestAppliedExitByPlace[placeId] = event.timestamp }
+                        lastClosedByPlace[placeId] = corrected
                         continue
                     }
-                    // Core Location reports the current state for a newly
-                    // registered region, but it cannot reconstruct when the
-                    // person originally arrived.  The first later exit is not
-                    // a missing record and must not ask the user to invent one.
-                    let isImmediateDuplicate = placeId.flatMap { latestAppliedExitByPlace[$0] }
-                        .map { event.timestamp.timeIntervalSince($0) <= Self.duplicateGeofenceExitInterval } ?? false
-                    event.disposition = event.metadata.values["monitoringBeganInside"] == "true" || isImmediateDuplicate
-                        ? .redundant : .orphaned
+                    if event.eventType == .geofenceExit, let previous = lastClosedByPlace[placeId] {
+                        // Consecutive exits extend the same visit until the next
+                        // entry. Explicit manual corrections and deletions win.
+                        if previous.deletedAt == nil && previous.status != .manuallyAdjusted {
+                            if let oldEnd = previous.endEventId { eventsByID[oldEnd]?.disposition = .redundant }
+                            previous.endAt = event.timestamp
+                            previous.endEventId = event.id
+                            previous.updatedAt = now
+                            event.disposition = .applied
+                        } else {
+                            event.disposition = .redundant
+                        }
+                    } else {
+                        event.disposition = event.metadata.values["monitoringBeganInside"] == "true"
+                            ? .redundant : .orphaned
+                    }
                     continue
                 }
                 switch current {
@@ -209,9 +213,10 @@ struct ActivitySessionEngine {
                     event.disposition = .applied
                     if let placeId {
                         activeByPlace[placeId] = nil
-                        latestAppliedExitByPlace[placeId] = event.timestamp
+                        lastClosedByPlace[placeId] = session
                     } else {
                         activeWithoutPlace = nil
+                        if event.eventType == .geofenceExit { lastClosedByPlace[nil] = session }
                     }
                 case .preserved(let session):
                     session.endEventId = event.id
@@ -219,7 +224,7 @@ struct ActivitySessionEngine {
                     pendingPreservedExit[placeId] = nil
                     if let placeId {
                         activeByPlace[placeId] = nil
-                        latestAppliedExitByPlace[placeId] = event.timestamp
+                        lastClosedByPlace[placeId] = session
                     } else { activeWithoutPlace = nil }
                 }
             } else {
@@ -265,7 +270,7 @@ struct ActivitySessionEngine {
         let start: Date?
         switch active {
         case .automatic(_, let startEvent, let allowsExtendedDuration):
-            start = allowsExtendedDuration ? nil : startEvent.timestamp
+            start = allowsExtendedDuration || startEvent.eventType == .geofenceEnter ? nil : startEvent.timestamp
         case .preserved(let session):
             // A manual end can have no source exit event. Release the slot by
             // its corrected end, rather than swallowing the next day's visits.

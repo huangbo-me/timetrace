@@ -990,45 +990,12 @@ final class AppModel: ObservableObject {
     }
 
     private func publishRepositoryData() throws {
-        try normalizeImmediateDuplicateGeofenceExits()
         activities = try activityRepository.fetchAll()
         triggers = try activityRepository.fetchTriggers(activityId: nil)
         events = try eventRepository.fetchAll()
         sessions = try sessionRepository.fetch(activityId: nil).filter { $0.deletedAt == nil }
         reminders = try reminderRepository.fetchDefinitions()
         reminderInstances = try reminderRepository.fetchInstances()
-    }
-
-    /// Processing disposition is stored with CloudKit-backed events. A remote
-    /// merge can therefore briefly restore an old `.orphaned` value after a
-    /// newer client has already recognized an immediate duplicate exit. Make
-    /// this deterministic from the immutable event sequence every time data
-    /// is published, so a completed record never regains a false repair task.
-    private func normalizeImmediateDuplicateGeofenceExits() throws {
-        let orderedEvents = try eventRepository.fetchAll().sorted {
-            if $0.timestamp != $1.timestamp { return $0.timestamp < $1.timestamp }
-            if $0.createdAt != $1.createdAt { return $0.createdAt < $1.createdAt }
-            return $0.id.uuidString < $1.id.uuidString
-        }
-        var latestAppliedExitByPlace: [UUID: Date] = [:]
-        var changed = false
-
-        for event in orderedEvents where event.eventType == .geofenceExit {
-            guard let placeId = UUID(uuidString: event.metadata.values["placeTriggerId"] ?? "") else { continue }
-            if event.disposition == .applied {
-                latestAppliedExitByPlace[placeId] = event.timestamp
-                continue
-            }
-            guard event.disposition == .orphaned,
-                  let precedingExit = latestAppliedExitByPlace[placeId],
-                  event.timestamp.timeIntervalSince(precedingExit) <= ActivitySessionEngine.duplicateGeofenceExitInterval else {
-                continue
-            }
-            event.disposition = .redundant
-            changed = true
-        }
-
-        if changed { try eventRepository.saveProcessingChanges() }
     }
 
     private func refreshDataAndRestoreGeofence() throws {
@@ -1039,13 +1006,11 @@ final class AppModel: ObservableObject {
         }
         let timeZoneByActivity = Dictionary(grouping: activeGeofenceTriggers, by: \.activityId)
             .mapValues { $0.first?.timeZoneIdentifier ?? TimeZone.current.identifier }
-
-        // Sessions and registrations are device-local projections. Rebuild
-        // them for every activity after a CloudKit merge, rather than only
-        // for the default work activity shown by today's UI.
+        // Rebuild both session boundaries and event dispositions after loading
+        // or a cloud merge, using the same engine as incoming callbacks.
         for activity in activities {
             try pipeline.refreshStaleSessions(activityId: activity.id,
-                                              timeZoneIdentifier: timeZoneByActivity[activity.id] ?? TimeZone.current.identifier)
+                timeZoneIdentifier: timeZoneByActivity[activity.id] ?? TimeZone.current.identifier)
         }
         for trigger in triggers where trigger.type == .geofence && !trigger.isDemoData {
             guard trigger.isEnabled,
@@ -1131,11 +1096,11 @@ final class AppModel: ObservableObject {
             if monitoringBeganInside {
                 metadata.values["monitoringBeganInside"] = "true"
             }
-            _ = try pipeline.ingest(ActivityEvent(activityId: activityId, eventType: type,
-                                                  timestamp: timestamp, source: .coreLocation,
-                                                  metadata: metadata),
-                                    timeZoneIdentifier: trigger.timeZoneIdentifier)
+            let event = ActivityEvent(activityId: activityId, eventType: type,
+                                      timestamp: timestamp, source: .coreLocation, metadata: metadata)
+            _ = try pipeline.ingest(event, timeZoneIdentifier: trigger.timeZoneIdentifier)
             refreshPublishedData()
+            guard event.disposition == .applied else { return }
             let activityName = (try activityRepository.fetch(id: activityId))?.name ?? "工作"
             let placeName = trigger.displayPlaceName
             let transition: GeofenceNotificationTransition = type == .geofenceEnter ? .entered : .exited

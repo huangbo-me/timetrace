@@ -15,6 +15,8 @@ private struct BackupDocument: FileDocument {
 }
 
 struct DataBackupView: View {
+    @Environment(\.timeTraceDesign) private var design
+
     @EnvironmentObject private var store: SettingsFeatureStore
     @State private var showingICloudHelp = false
     @State private var passwordOperation: BackupPasswordOperation?
@@ -44,10 +46,10 @@ struct DataBackupView: View {
                             VStack(alignment: .leading, spacing: 3) {
                                 Text(model.iCloudSyncStatus.title)
                                     .font(.subheadline.weight(.medium))
-                                    .foregroundStyle(TimeTraceDesign.ink)
+                                    .foregroundStyle(design.ink)
                                 Text(model.iCloudSyncStatus.detail)
                                     .font(.caption)
-                                    .foregroundStyle(TimeTraceDesign.muted)
+                                    .foregroundStyle(design.muted)
                                     .multilineTextAlignment(.leading)
                             }
                             Spacer(minLength: 8)
@@ -56,7 +58,7 @@ struct DataBackupView: View {
                             } else {
                                 Image(systemName: "arrow.clockwise")
                                     .font(.subheadline.weight(.semibold))
-                                    .foregroundStyle(TimeTraceDesign.muted)
+                                    .foregroundStyle(design.muted)
                             }
                         }
                         .frame(maxWidth: .infinity, alignment: .leading)
@@ -78,7 +80,7 @@ struct DataBackupView: View {
                         }
                         Text(iCloudScopeExplanation)
                             .font(.caption)
-                            .foregroundStyle(TimeTraceDesign.muted)
+                            .foregroundStyle(design.muted)
 
                         Divider()
                         iCloudScopeRow(
@@ -106,9 +108,9 @@ struct DataBackupView: View {
                 TTCard {
                     VStack(alignment: .leading, spacing: 14) {
                         Text("导出活动、地点、时间记录和提醒，保存到“文件”或 iCloud 云盘。导入按标识合并并保留本机版本；新增事件可能更新汇总记录。")
-                            .font(.subheadline).foregroundStyle(TimeTraceDesign.muted)
+                            .font(.subheadline).foregroundStyle(design.muted)
                         Text("文件使用密码加密。请妥善保存密码，忘记后无法恢复备份。本机昵称和系统权限不包含在文件中。")
-                            .font(.caption).foregroundStyle(TimeTraceDesign.muted)
+                            .font(.caption).foregroundStyle(design.muted)
                         Divider()
                         Button {
                             document = nil
@@ -232,8 +234,8 @@ struct DataBackupView: View {
     private var iCloudScopeTint: Color {
         switch model.iCloudSyncStatus {
         case .enabled: .green
-        case .checking, .unavailable: TimeTraceDesign.blue
-        case .notEnabled, .signedOut, .restricted: TimeTraceDesign.muted
+        case .checking, .unavailable: design.blue
+        case .notEnabled, .signedOut, .restricted: design.muted
         }
     }
 
@@ -254,12 +256,12 @@ struct DataBackupView: View {
 
     private func iCloudScopeRow(title: String, detail: String, systemImage: String) -> some View {
         HStack(alignment: .top, spacing: 12) {
-            TTIcon(systemName: systemImage, tint: TimeTraceDesign.blue, size: 34)
+            TTIcon(systemName: systemImage, tint: design.blue, size: 34)
             VStack(alignment: .leading, spacing: 3) {
                 Text(title).font(.subheadline.weight(.medium))
                 Text(detail)
                     .font(.caption)
-                    .foregroundStyle(TimeTraceDesign.muted)
+                    .foregroundStyle(design.muted)
                     .fixedSize(horizontal: false, vertical: true)
             }
             Spacer(minLength: 8)
@@ -281,7 +283,7 @@ struct DataBackupView: View {
     private var iCloudTint: Color {
         switch model.iCloudSyncStatus {
         case .enabled: .green
-        case .checking: TimeTraceDesign.blue
+        case .checking: design.blue
         case .notEnabled, .signedOut, .restricted, .unavailable: .orange
         }
     }
@@ -331,6 +333,8 @@ private struct BackupPasswordView: View {
                 }
                 if isProcessing { ProgressView(isExport ? "正在加密…" : "正在解密…") }
             }
+            .scrollContentBackground(.hidden)
+            .timeTraceScreen()
             .navigationTitle(isExport ? "设置导出密码" : "输入导入密码")
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {

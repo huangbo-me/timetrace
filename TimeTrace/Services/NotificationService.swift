@@ -1,7 +1,7 @@
 import Foundation
 import UserNotifications
 
-enum ReminderNotificationAction {
+enum ReminderNotificationAction: Sendable {
     case delivered(definitionId: UUID, requestId: String)
     case start(definitionId: UUID, requestId: String)
     case snooze(definitionId: UUID, requestId: String)
@@ -197,13 +197,16 @@ final class LocalNotificationService: NSObject, NotificationServicing, UNUserNot
     }
 
     nonisolated func userNotificationCenter(_ center: UNUserNotificationCenter,
-                                            willPresent notification: UNNotification) async -> UNNotificationPresentationOptions {
-        await dispatch(.delivered, response: nil, notification: notification)
-        return [.banner, .sound]
+                                            willPresent notification: UNNotification,
+                                            withCompletionHandler completionHandler: @escaping (UNNotificationPresentationOptions) -> Void) {
+        completeNotification(action: action(.delivered, notification: notification)) {
+            completionHandler([.banner, .sound])
+        }
     }
 
     nonisolated func userNotificationCenter(_ center: UNUserNotificationCenter,
-                                            didReceive response: UNNotificationResponse) async {
+                                            didReceive response: UNNotificationResponse,
+                                            withCompletionHandler completionHandler: @escaping () -> Void) {
         let kind: ActionKind
         switch response.actionIdentifier {
         case Self.startIdentifier: kind = .start
@@ -212,15 +215,16 @@ final class LocalNotificationService: NSObject, NotificationServicing, UNUserNot
         case UNNotificationDismissActionIdentifier: kind = .dismissed
         default: kind = .start
         }
-        await dispatch(kind, response: response, notification: response.notification)
+        completeNotification(action: action(kind, notification: response.notification),
+                             completionHandler: completionHandler)
     }
 
     private enum ActionKind { case delivered, start, snooze, skip, dismissed }
 
-    nonisolated private func dispatch(_ kind: ActionKind, response: UNNotificationResponse?,
-                                      notification: UNNotification) async {
+    nonisolated private func action(_ kind: ActionKind,
+                                    notification: UNNotification) -> ReminderNotificationAction? {
         guard let raw = notification.request.content.userInfo["definitionId"] as? String,
-              let id = UUID(uuidString: raw) else { return }
+              let id = UUID(uuidString: raw) else { return nil }
         let requestId = ReminderOccurrence.identifier(requestID: notification.request.identifier,
                                                        deliveredAt: notification.date)
         let action: ReminderNotificationAction
@@ -232,14 +236,21 @@ final class LocalNotificationService: NSObject, NotificationServicing, UNUserNot
         case .dismissed: action = .dismissed(definitionId: id, requestId: requestId)
         }
 
-        // `didReceive` may be invoked while UIKit is restoring the scene for a
-        // notification tap. Mutating SwiftUI state from inside that callback
-        // trips UIKit's state-restoration assertion on a cold launch. Return
-        // from the delegate first, then forward the action on a later turn.
-        Task { @MainActor [weak self] in
-            try? await Task.sleep(for: .milliseconds(300))
-            guard !Task.isCancelled else { return }
-            self?.onAction?(action)
+        return action
+    }
+
+    nonisolated private func completeNotification(action: ReminderNotificationAction?,
+                                                  completionHandler: @escaping () -> Void) {
+        // The async delegate's generated ObjC bridge can invoke UIKit's
+        // completion on a worker thread, asserting during snapshot/restoration.
+        // Own that callback explicitly, even for geofence/invalid payloads.
+        DispatchQueue.main.async { [weak self] in
+            completionHandler()
+            guard let action else { return }
+            // Finish UIKit's callback before publishing SwiftUI/SwiftData changes.
+            DispatchQueue.main.async { [weak self] in
+                self?.onAction?(action)
+            }
         }
     }
 

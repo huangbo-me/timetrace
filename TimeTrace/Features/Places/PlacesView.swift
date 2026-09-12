@@ -15,6 +15,8 @@ private enum PlaceEditorTarget: Identifiable {
 }
 
 struct PlacesView: View {
+    @Environment(\.timeTraceDesign) private var design
+
     @EnvironmentObject private var store: PlacesFeatureStore
     @State private var editorTarget: PlaceEditorTarget?
     @State private var mapPosition: MapCameraPosition = .automatic
@@ -31,8 +33,11 @@ struct PlacesView: View {
                         editorTarget = .add
                     } label: {
                         Image(systemName: "plus").font(.headline.weight(.bold))
-                            .frame(width: 40, height: 40).background(TimeTraceDesign.card, in: Circle())
+                            .frame(width: 44, height: 44)
                     }
+                    .buttonStyle(.glass)
+                    .buttonBorderShape(.circle)
+                    .accessibilityLabel("添加地点")
                 }
                 .padding(.top, 4)
 
@@ -45,8 +50,8 @@ struct PlacesView: View {
                     } label: {
                         Label("我的位置", systemImage: "location.fill")
                     }
-                    .buttonStyle(.bordered)
-                    .tint(TimeTraceDesign.violet)
+                    .buttonStyle(.glass)
+                    .tint(design.violet)
 
                     Button {
                         selectedTriggerId = nil
@@ -54,8 +59,8 @@ struct PlacesView: View {
                     } label: {
                         Label("全部地点", systemImage: "map.fill")
                     }
-                    .buttonStyle(.bordered)
-                    .tint(TimeTraceDesign.violet)
+                    .buttonStyle(.glass)
+                    .tint(design.violet)
                     Spacer()
                 }
 
@@ -65,12 +70,13 @@ struct PlacesView: View {
                             TTIcon(systemName: "mappin.slash", tint: .orange, size: 50)
                             Text("还没有设置地点").font(.headline)
                             Text("添加地点后，TimeTrace 会在你到达和离开时记录地点停留时间。")
-                                .font(.subheadline).foregroundStyle(TimeTraceDesign.muted).multilineTextAlignment(.center)
+                                .font(.subheadline).foregroundStyle(design.muted).multilineTextAlignment(.center)
                             Button("添加地点") {
                                 editorTarget = .add
                             }
-                            .buttonStyle(.borderedProminent)
-                            .tint(TimeTraceDesign.blue)
+                            .buttonStyle(.glassProminent)
+                            .foregroundStyle(design.onAccent)
+                            .tint(design.blue)
                         }
                         .frame(maxWidth: .infinity)
                         .padding(.vertical, 18)
@@ -87,24 +93,24 @@ struct PlacesView: View {
                                         HStack {
                                             Text(trigger.displayPlaceName).font(.headline)
                                             Spacer()
-                                            Text(trigger.isDemoData ? "演示地点" : (trigger.isEnabled ? "已启用" : "已停用")).font(.caption.weight(.semibold)).foregroundStyle(TimeTraceDesign.blue)
+                                            Text(trigger.isDemoData ? "演示地点" : (trigger.isEnabled ? "已启用" : "已停用")).font(.caption.weight(.semibold)).foregroundStyle(design.blue)
                                                 .padding(.horizontal, 8).padding(.vertical, 4)
-                                                .background(TimeTraceDesign.blue.opacity(0.1), in: Capsule())
+                                                .background(design.blue.opacity(0.1), in: Capsule())
                                     }
                                     Label(trigger.placeType.displayName, systemImage: trigger.placeType.systemImage)
                                         .font(.caption.weight(.semibold))
-                                        .foregroundStyle(TimeTraceDesign.violet)
+                                        .foregroundStyle(design.violet)
                                         .padding(.horizontal, 8)
                                         .padding(.vertical, 4)
-                                        .background(TimeTraceDesign.violet.opacity(0.1), in: Capsule())
+                                        .background(design.violet.opacity(0.1), in: Capsule())
                                     Text("到达和离开时记录地点停留时间")
-                                        .font(.caption).foregroundStyle(TimeTraceDesign.muted)
+                                        .font(.caption).foregroundStyle(design.muted)
                                     Label("围栏半径 \(Int(trigger.radius ?? 200)) 米", systemImage: "scope")
-                                        .font(.caption).foregroundStyle(TimeTraceDesign.muted)
+                                        .font(.caption).foregroundStyle(design.muted)
                                 }
                                 Image(systemName: "chevron.right")
                                     .font(.caption.weight(.semibold))
-                                    .foregroundStyle(TimeTraceDesign.muted)
+                                    .foregroundStyle(design.muted)
                             }
                         }
                         }
@@ -120,7 +126,7 @@ struct PlacesView: View {
                     Image(systemName: "lock.fill")
                 }
                 .font(.caption)
-                .foregroundStyle(TimeTraceDesign.muted)
+                .foregroundStyle(design.muted)
             }
             .padding(.horizontal, 20)
         }
@@ -153,15 +159,15 @@ struct PlacesView: View {
                         fromSystemCoordinate: CLLocationCoordinate2D(latitude: latitude, longitude: longitude)
                     )
                     MapCircle(center: coordinate, radius: trigger.radius ?? 200)
-                        .foregroundStyle(TimeTraceDesign.blue.opacity(selectedTriggerId == trigger.id ? 0.16 : 0.08))
-                        .stroke(TimeTraceDesign.blue.opacity(selectedTriggerId == trigger.id ? 1 : 0.55), lineWidth: selectedTriggerId == trigger.id ? 2 : 1)
+                        .foregroundStyle(design.blue.opacity(selectedTriggerId == trigger.id ? 0.16 : 0.08))
+                        .stroke(design.blue.opacity(selectedTriggerId == trigger.id ? 1 : 0.55), lineWidth: selectedTriggerId == trigger.id ? 2 : 1)
                     Annotation(trigger.displayPlaceName, coordinate: coordinate) {
                         Button {
                             selectedTriggerId = trigger.id
                         } label: {
                             Image(systemName: "mappin.circle.fill")
                                 .font(.title2)
-                                .foregroundStyle(selectedTriggerId == trigger.id ? TimeTraceDesign.violet : TimeTraceDesign.blue)
+                                .foregroundStyle(selectedTriggerId == trigger.id ? design.violet : design.blue)
                                 .background(.white, in: Circle())
                         }
                         .buttonStyle(.plain)
