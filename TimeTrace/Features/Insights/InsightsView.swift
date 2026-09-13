@@ -13,8 +13,7 @@ struct InsightsView: View {
     @State private var trendMetric = TrendMetric.workDuration
     @State private var selectedType: PlaceType?
 
-    @State private var shareJournal: TimeJournal?
-    @State private var shareCopy: PeriodInsightCopy?
+    @State private var shareSnapshot: InsightShareSnapshot?
     @State private var showingCustomDates = false
     @State private var selectedFinding: JournalFinding?
 
@@ -33,8 +32,9 @@ struct InsightsView: View {
                     filterBar
                     if journal.canShare {
                         Button {
-                            shareCopy = insight
-                            shareJournal = journal
+                            shareSnapshot = InsightShareSnapshot(journal: journal, copy: insight,
+                                trend: JournalTrendSnapshot(summary: trendSummary, metric: trendMetric,
+                                    presentation: insightPresentation, calendar: workCalendar, now: summaryNow))
                         } label: {
                             Image(systemName: "square.and.arrow.up")
                                 .font(.body.weight(.medium))
@@ -42,12 +42,12 @@ struct InsightsView: View {
                         }
                         .buttonStyle(.plain)
                         .foregroundStyle(design.violet)
-                        .accessibilityLabel("分享当前手记")
+                        .accessibilityLabel("分享当前总结与趋势")
                     }
                 }
 
-                PeriodInsightCard(journal: journal, copy: insight) {
-                    selectedFinding = journal.mainFinding
+                PeriodInsightCard(journal: journal, copy: insight, selectType: { selectedType = $0 }) {
+                    selectedFinding = journal.summaryEvidence ?? journal.mainFinding
                 }
 
                 VStack(alignment: .leading, spacing: 8) {
@@ -85,7 +85,7 @@ struct InsightsView: View {
                                     summary: trendSummary,
                                     metric: trendMetric,
                                     presentation: insightPresentation,
-                                    calendar: workCalendar
+                                    calendar: workCalendar, now: summaryNow
                                 )
                                     .frame(height: 230)
                                 if trendSummary.days.contains(where: \.isIncomplete) {
@@ -128,7 +128,9 @@ struct InsightsView: View {
             guard scenePhase == .active else { return }
             summaryNow = date
         }
-        .sheet(item: $shareJournal) { journal in JournalSharePreview(journal: journal, insightCopy: shareCopy) }
+        .sheet(item: $shareSnapshot) { snapshot in
+            JournalSharePreview(journal: snapshot.journal, insightCopy: snapshot.copy, trend: snapshot.trend)
+        }
         .sheet(isPresented: $showingCustomDates) {
             NavigationStack {
                 Form {
@@ -445,7 +447,7 @@ private struct PlaceSummaryMetric: Identifiable {
     }
 }
 
-private struct PlaceInsightPresentation {
+struct PlaceInsightPresentation {
     let type: PlaceType?
     let periodTotalTitle: String
     let averageTitle: String
@@ -552,7 +554,7 @@ enum InsightRange: String, CaseIterable, Identifiable {
     }
 }
 
-private enum TrendMetric: String, CaseIterable, Identifiable {
+enum TrendMetric: String, CaseIterable, Identifiable {
     case workDuration
     case arrival
     case departure
@@ -619,12 +621,13 @@ private struct WorkTrendPoint: Identifiable {
     let isIncomplete: Bool
 }
 
-private struct PlaceTrendChart: View {
+struct PlaceTrendChart: View {
     @Environment(\.timeTraceDesign) private var design
     let summary: PeriodActivitySummary
     let metric: TrendMetric
     let presentation: PlaceInsightPresentation
     let calendar: Calendar
+    var now: Date = Date()
 
     @State private var selectedDate: Date?
 
@@ -765,7 +768,7 @@ private struct PlaceTrendChart: View {
         let tomorrow = calendar.date(
             byAdding: .day,
             value: 1,
-            to: calendar.startOfDay(for: Date())
+            to: calendar.startOfDay(for: now)
         ) ?? summary.end
         let displayEnd = min(summary.end, tomorrow)
         var result: [(Date, DailyActivitySummary?)] = []

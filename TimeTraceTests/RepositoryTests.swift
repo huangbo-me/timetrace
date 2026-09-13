@@ -664,6 +664,45 @@ final class RepositoryTests: XCTestCase {
         XCTAssertEqual(notifications.geofenceTransitions.map(\.placeName), ["创意园", "创意园"])
     }
 
+    func testRefreshKeepsAnUnchangedSystemGeofenceRegistered() throws {
+        let manager = RecordingLocationManager()
+        let service = CoreLocationGeofenceService(manager: manager)
+        let id = UUID()
+        try service.register(triggerId: id, latitude: 31.2, longitude: 121.4, radius: 200)
+        service.restoreAndRequestState(triggerId: id, latitude: 31.2, longitude: 121.4, radius: 200)
+        XCTAssertEqual(manager.starts, 1, "刷新不能重启未改变的系统围栏")
+        XCTAssertEqual(manager.stops, 0)
+        XCTAssertEqual(manager.stateRequests, 2)
+        try service.register(triggerId: id, latitude: 31.2, longitude: 121.4, radius: 300)
+        XCTAssertEqual(manager.starts, 2)
+        XCTAssertEqual(manager.stops, 1)
+    }
+
+    func testHomeOvernightDepartureAndReturnAfterRefresh() throws {
+        let geofence = FakeGeofenceService()
+        let model = AppModel(inMemory: true, geofence: geofence, notifications: FakeNotificationService())
+        model.load()
+        model.finishOnboarding(latitude: 31.2, longitude: 121.4, radius: 200,
+                               weekdaysMask: 0b1111111, normalStartMinute: nil, normalEndMinute: nil)
+        model.addWorkplace(latitude: 31.3, longitude: 121.5, radius: 200,
+                           placeName: "家", placeType: .home)
+        let home = try XCTUnwrap(model.workTriggers.first { $0.placeType == .home })
+        let now = Date()
+        let arrival = now.addingTimeInterval(-36 * 3600)
+        geofence.emit(.entered(triggerId: home.id, timestamp: arrival))
+        model.refreshSyncedData()
+        geofence.emitState(triggerId: home.id, state: .inside)
+        let departure = now.addingTimeInterval(-3600)
+        geofence.emit(.exited(triggerId: home.id, timestamp: departure))
+        geofence.emit(.entered(triggerId: home.id, timestamp: now))
+        let visits = model.workSessions.filter { $0.placeTriggerId == home.id }.sorted { $0.startAt < $1.startAt }
+        XCTAssertEqual(visits.count, 2)
+        XCTAssertEqual(visits.first?.startAt, arrival)
+        XCTAssertEqual(visits.first?.endAt, departure)
+        XCTAssertEqual(visits.last?.status, .active)
+        XCTAssertTrue(model.orphanedWorkExitEvents.isEmpty)
+    }
+
     func testOfficeToHomeKeepsHomeTimerAndPairsTheHomeDeparture() throws {
         let geofence = FakeGeofenceService()
         let model = AppModel(inMemory: true, geofence: geofence,
@@ -1097,6 +1136,54 @@ final class RepositoryTests: XCTestCase {
         XCTAssertEqual(model.activeReminderInstances.count, 1)
     }
 
+    func testCorrectingMissingHomeDepartureRestoresTheLaterArrival() throws {
+        let geofence = FakeGeofenceService()
+        let model = AppModel(inMemory: true, geofence: geofence, notifications: FakeNotificationService())
+        model.load()
+        model.finishOnboarding(latitude: 31.2, longitude: 121.4, radius: 200,
+                               weekdaysMask: 0b1111111, normalStartMinute: nil, normalEndMinute: nil)
+        model.addWorkplace(latitude: 31.3, longitude: 121.5, radius: 320, placeName: "家", placeType: .home)
+        let home = try XCTUnwrap(model.workTriggers.first { $0.placeType == .home })
+        let formatter = ISO8601DateFormatter()
+        let start = try XCTUnwrap(formatter.date(from: "2026-09-12T19:51:31+08:00"))
+        let end = try XCTUnwrap(formatter.date(from: "2026-09-13T09:25:00+08:00"))
+        let returned = try XCTUnwrap(formatter.date(from: "2026-09-13T20:12:07+08:00"))
+        geofence.emit(.entered(triggerId: home.id, timestamp: start))
+        geofence.emit(.entered(triggerId: home.id, timestamp: returned))
+        let original = try XCTUnwrap(model.workSessions.first { $0.placeTriggerId == home.id })
+        XCTAssertEqual(model.workSessions.filter { $0.placeTriggerId == home.id }.count, 1)
+        XCTAssertTrue(model.adjustSession(original, startAt: start, endAt: end))
+        model.refreshSyncedData()
+        let visits = model.workSessions.filter { $0.placeTriggerId == home.id }.sorted { $0.startAt < $1.startAt }
+        XCTAssertEqual(visits.count, 2)
+        XCTAssertEqual(visits.first?.endAt, end)
+        XCTAssertEqual(visits.first?.status, .manuallyAdjusted)
+        XCTAssertEqual(visits.last?.startAt, returned)
+        XCTAssertEqual(visits.last?.status, .active)
+        XCTAssertEqual(model.events.filter { $0.eventType == .sessionAdjusted }.count, 1)
+        XCTAssertTrue(model.events.filter { $0.eventType == .geofenceEnter }.allSatisfy { $0.disposition == .applied })
+    }
+
+    func testOutsideStateWarnsAboutMissingExitWithoutInventingAnEnd() throws {
+        let geofence = FakeGeofenceService()
+        let model = AppModel(inMemory: true, geofence: geofence, notifications: FakeNotificationService())
+        model.load()
+        model.finishOnboarding(latitude: 31.2, longitude: 121.4, radius: 200,
+                               weekdaysMask: 0b1111111, normalStartMinute: nil, normalEndMinute: nil)
+        let place = try XCTUnwrap(model.workTrigger)
+        let start = Date().addingTimeInterval(-3600)
+        geofence.emit(.entered(triggerId: place.id, timestamp: start))
+        geofence.emitState(triggerId: place.id, state: .outside)
+        XCTAssertTrue(model.automaticRecordingDetail.contains("可能漏记离开"))
+        let current = try XCTUnwrap(model.workSessions.first)
+        XCTAssertNil(current.endAt)
+        XCTAssertEqual(model.events.count, 1, "状态查询不能伪造边界事件")
+        geofence.emitState(triggerId: place.id, state: .inside)
+        XCTAssertTrue(model.automaticRecordingDetail.contains("可能漏记离开"), "回到里面不能证明期间一直未离开")
+        XCTAssertTrue(model.adjustSession(current, startAt: start, endAt: start.addingTimeInterval(1800)))
+        XCTAssertFalse(model.automaticRecordingDetail.contains("可能漏记离开"))
+    }
+
     func testManualCorrectionAndSoftDeletion() throws {
         let model = AppModel(inMemory: true, geofence: FakeGeofenceService(),
                              notifications: FakeNotificationService())
@@ -1188,4 +1275,16 @@ private final class FakeNotificationRequestStore: NotificationRequestStore {
     func removeDelivered(_ identifiers: [String]) {
         deliveredRequests.removeAll { identifiers.contains($0.identifier) }
     }
+}
+
+private final class RecordingLocationManager: CLLocationManager {
+    var regions: Set<CLRegion> = []
+    var starts = 0
+    var stops = 0
+    var stateRequests = 0
+    override var monitoredRegions: Set<CLRegion> { regions }
+    override var maximumRegionMonitoringDistance: CLLocationDistance { 1000 }
+    override func startMonitoring(for region: CLRegion) { starts += 1; regions.insert(region) }
+    override func stopMonitoring(for region: CLRegion) { stops += 1; regions.remove(region) }
+    override func requestState(for region: CLRegion) { stateRequests += 1 }
 }

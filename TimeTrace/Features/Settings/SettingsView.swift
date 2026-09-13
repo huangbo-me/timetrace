@@ -544,6 +544,7 @@ struct WorkplaceEditorView: View {
     @State private var coordinate: CLLocationCoordinate2D
     @State private var position: MapCameraPosition
     @State private var radius: Double
+    @FocusState private var focusedField: WorkplaceInputField?
     @State private var placeName = ""
     @State private var placeType: PlaceType = .work
     @State private var placeEnabled = true
@@ -569,6 +570,9 @@ struct WorkplaceEditorView: View {
         NavigationStack {
             Form {
                 TextField("地点名称，例如：公司、办公室或客户现场", text: $placeName)
+                    .focused($focusedField, equals: .placeName)
+                    .submitLabel(.done)
+                    .onSubmit { focusedField = nil }
                 if let trigger, !trigger.isDemoData {
                     Toggle("启用地点自动记录", isOn: $placeEnabled)
                     Text("停用后不再接收此地点的进出事件；已有记录保留，进行中的记录可在历史中补齐。")
@@ -591,7 +595,8 @@ struct WorkplaceEditorView: View {
 
                 WorkplaceAddressSearch(
                     coordinate: $coordinate,
-                    position: $position
+                    position: $position,
+                    focusedField: $focusedField
                 )
 
                 Section("在地图上微调") {
@@ -609,12 +614,16 @@ struct WorkplaceEditorView: View {
                         radius: $radius,
                         height: 320
                     )
+                    .simultaneousGesture(TapGesture().onEnded { focusedField = nil })
                 }
                 LocationAccuracyNotice(
                     horizontalAccuracy: locationAccuracy,
                     usesReducedAccuracy: usesReducedAccuracy
                 )
             }
+            .contentShape(Rectangle())
+            .gesture(WorkplaceKeyboardDismissGesture { focusedField = nil })
+            .scrollDismissesKeyboard(.interactively)
             .scrollContentBackground(.hidden)
             .timeTraceScreen()
             .navigationTitle(trigger == nil ? "添加地点" : "编辑地点")

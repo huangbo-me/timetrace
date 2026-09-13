@@ -196,6 +196,25 @@ def persist(state):
     temporary.replace(state['_path'])
 
 
+RELEASE_MODES = {'automatic': '审核通过后自动发布', 'manual': '审核通过后手动发布'}
+
+
+def choose_release_mode(state):
+    previous = state.get('release_mode')
+    print('\n请选择发布方式：\n1. 审核通过后自动发布\n2. 审核通过后手动发布')
+    suffix = f'（回车沿用：{RELEASE_MODES[previous]}）' if previous in RELEASE_MODES else ''
+    while True:
+        answer = input(f'选择 1 或 2{suffix}：').strip()
+        mode = {'1': 'automatic', '2': 'manual'}.get(answer)
+        if not answer and previous in RELEASE_MODES:
+            mode = previous
+        if mode:
+            state['release_mode'] = mode
+            persist(state)
+            return RELEASE_MODES[mode]
+        print('请明确选择 1 或 2。')
+
+
 def review(state, env):
     require(state.get('uploaded'), '此构建尚未上传成功。')
     if state.get('submitted'):
@@ -209,18 +228,19 @@ def review(state, env):
             return
     print('请将说明核对为面向用户的版本更新内容，并确认 Apple 后台审核资料已完整。')
     confirm_notes(state)
-    if input(f'将 {state["version"]}（{state["build"]}）填写到 App Store 并提交审核？输入 submit：').strip() != 'submit':
+    release_label = choose_release_mode(state)
+    if input(f'将 {state["version"]}（{state["build"]}）提交审核，{release_label}。确认请输入 submit：').strip() != 'submit':
         print('已保留上传结果，未提交审核。')
         return
     digest = hashlib.sha256((state['_path'].parent / 'release-notes.txt').read_bytes()).hexdigest()
-    if state.get('metadata_sha256') != digest:
+    if state.get('metadata_sha256') != digest or state.get('metadata_release_mode') != state['release_mode']:
         step('metadata', state, env, '--notes-reviewed')
     else:
-        print('更新说明已填写，跳过。')
+        print('更新说明及发布方式均已填写，跳过。')
     state['submit_started'] = True
     persist(state)
     step('submit', state, env)
-    print('已提交审核；审核通过后手动发布。')
+    print(f'已提交审核；{release_label}。')
 
 
 def main():

@@ -210,8 +210,11 @@ def main():
             print('审核已提交，跳过。')
             return
         notes()
-        if args.step == 'metadata' and state.get('metadata_sha256') == digest(notes_path):
-            print('相同更新说明已填写，跳过。')
+        if args.step in ('metadata', 'submit'):
+            require(state.get('release_mode') in ('automatic', 'manual'), '请通过 ./appstore.sh 选择审核通过后的发布方式')
+        if (args.step == 'metadata' and state.get('metadata_sha256') == digest(notes_path)
+                and state.get('metadata_release_mode') == state['release_mode']):
+            print('相同更新说明及发布方式已填写，跳过。')
             return
         if args.step == 'upload':
             require(not state.get('uploaded'), '此构建已经上传并处理完成，请继续 metadata')
@@ -225,8 +228,10 @@ def main():
             require(args.notes_reviewed, '请先核对更新说明，再加 --notes-reviewed')
             fastlane('release_metadata')
             state['metadata_sha256'] = digest(notes_path)
+            state['metadata_release_mode'] = state['release_mode']
         else:
-            require(state.get('metadata_sha256') == digest(notes_path), '先运行 metadata；更新说明变化后需要重新填写')
+            require(state.get('metadata_sha256') == digest(notes_path) and state.get('metadata_release_mode') == state['release_mode'],
+                    '先运行 metadata；更新说明或发布方式变化后需要重新填写')
             require(not state.get('submitted'), '此版本已经提交审核，不重复提交')
             fastlane('release_submit')
             state['submitted'] = True

@@ -22,6 +22,7 @@ def release_context
 end
 
 def store_options(directory, state, key)
+  raise '请先选择自动或手动发布' unless %w[automatic manual].include?(state['release_mode'])
   # 使用空 metadata 目录，只更新显式传入的中文更新说明，不读取旧商店资料模板。
   empty = File.join(directory, 'empty-metadata')
   Dir.mkdir(empty) unless Dir.exist?(empty)
@@ -30,7 +31,7 @@ def store_options(directory, state, key)
     app_version: state.fetch('version'), build_number: state.fetch('build'),
     skip_binary_upload: true, skip_screenshots: true, metadata_path: empty,
     release_notes: { ENV.fetch('RELEASE_LOCALE', 'zh-Hans') => File.read(File.join(directory, 'release-notes.txt')).strip },
-    force: true, automatic_release: false, precheck_include_in_app_purchases: false
+    force: true, automatic_release: state.fetch('release_mode') == 'automatic', precheck_include_in_app_purchases: false
   }
 end
 
@@ -106,11 +107,13 @@ platform :ios do
     ).first
     UI.user_error!('未找到已处理成功的确切构建') unless build && build.processing_state == 'VALID'
     UI.user_error!('未找到目标商店版本') unless version
+    expected_release_type = state.fetch('release_mode') == 'automatic' ? 'AFTER_APPROVAL' : 'MANUAL'
+    UI.user_error!('Apple 发布方式与本次选择不一致') unless version.release_type == expected_release_type
     version.select_build(build_id: build.id)
     UI.user_error!('构建关联校验失败') unless version.get_build.id == build.id
   end
 
-  desc '提交指定版本和构建审核，通过后手动发布'
+  desc '提交指定版本和构建审核，按已选择的发布方式执行'
   lane :release_submit do
     directory, state, key = release_context
     upload_to_app_store(**store_options(directory, state, key).merge(

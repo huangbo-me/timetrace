@@ -37,7 +37,7 @@ protocol GeofenceServicing: AnyObject {
 
 @MainActor
 final class CoreLocationGeofenceService: NSObject, GeofenceServicing, @preconcurrency CLLocationManagerDelegate {
-    private let manager = CLLocationManager()
+    private let manager: CLLocationManager
     private let logger = Logger(subsystem: "com.chronora.time.trace", category: "Geofence")
     private var locationContinuation: CheckedContinuation<CLLocationCoordinate2D, Error>?
     private(set) var lastHorizontalAccuracy: CLLocationAccuracy?
@@ -45,7 +45,8 @@ final class CoreLocationGeofenceService: NSObject, GeofenceServicing, @preconcur
     var onAuthorizationChange: ((CLAuthorizationStatus) -> Void)?
     var onRegionState: ((UUID, CLRegionState) -> Void)?
 
-    override init() {
+    init(manager: CLLocationManager = CLLocationManager()) {
+        self.manager = manager
         super.init()
         manager.delegate = self
         // This only affects the explicit one-shot workplace picker request.
@@ -78,13 +79,24 @@ final class CoreLocationGeofenceService: NSObject, GeofenceServicing, @preconcur
         for region in manager.monitoredRegions where region.identifier.hasPrefix("timetrace.activity.") {
             manager.stopMonitoring(for: region)
         }
-        remove(triggerId: triggerId)
         let deviceMaximum = manager.maximumRegionMonitoringDistance > 0
             ? manager.maximumRegionMonitoringDistance : 1_000
         // Core Location accepts small circular regions. 10m is intentionally allowed
         // for users who need a tight boundary, although real-world GPS accuracy may
         // be larger than that (especially indoors).
         let acceptedRadius = min(max(10, radius), max(10, deviceMaximum))
+        // Reuse the system registration across foreground and CloudKit refreshes.
+        // Stopping an unchanged region discards its monitored transition state.
+        if let existing = manager.monitoredRegions.compactMap({ $0 as? CLCircularRegion }).first(where: {
+            $0.identifier == regionIdentifier(triggerId) &&
+            $0.center.latitude == latitude && $0.center.longitude == longitude &&
+            $0.radius == acceptedRadius && $0.notifyOnEntry && $0.notifyOnExit
+        }) {
+            GeofenceDiagnostics.record("monitor.reused")
+            manager.requestState(for: existing)
+            return acceptedRadius
+        }
+        remove(triggerId: triggerId)
         let region = CLCircularRegion(
             center: .init(latitude: latitude, longitude: longitude),
             radius: acceptedRadius,
@@ -92,6 +104,7 @@ final class CoreLocationGeofenceService: NSObject, GeofenceServicing, @preconcur
         )
         region.notifyOnEntry = true
         region.notifyOnExit = true
+        GeofenceDiagnostics.record("monitor.started")
         manager.startMonitoring(for: region)
         // A person may configure a place while already inside it. Asking for
         // the current state lets the app distinguish that first later exit
@@ -145,24 +158,56 @@ final class CoreLocationGeofenceService: NSObject, GeofenceServicing, @preconcur
 
     func locationManager(_ manager: CLLocationManager, didEnterRegion region: CLRegion) {
         guard let triggerId = triggerId(from: region.identifier) else { return }
+        GeofenceDiagnostics.record("callback.entered")
         onEvent?(.entered(triggerId: triggerId, timestamp: Date()))
     }
 
     func locationManager(_ manager: CLLocationManager, didExitRegion region: CLRegion) {
         guard let triggerId = triggerId(from: region.identifier) else { return }
+        GeofenceDiagnostics.record("callback.exited")
         onEvent?(.exited(triggerId: triggerId, timestamp: Date()))
     }
 
     func locationManager(_ manager: CLLocationManager, didDetermineState state: CLRegionState, for region: CLRegion) {
         guard let triggerId = triggerId(from: region.identifier) else { return }
+        GeofenceDiagnostics.record("callback.state.\(state.rawValue)")
         onRegionState?(triggerId, state)
         // State checks restore monitoring but are not facts about a boundary crossing.
         logger.info("Region state restored: \(String(describing: state), privacy: .public)")
+    }
+
+    func locationManager(_ manager: CLLocationManager, monitoringDidFailFor region: CLRegion?, withError error: Error) {
+        GeofenceDiagnostics.record("monitor.failed", errorCode: (error as NSError).code)
+        logger.error("Region monitoring failed, code=\((error as NSError).code)")
     }
 
     private func regionIdentifier(_ triggerId: UUID) -> String { "timetrace.place.\(triggerId.uuidString)" }
 
     private func triggerId(from identifier: String) -> UUID? {
         UUID(uuidString: identifier.replacingOccurrences(of: "timetrace.place.", with: ""))
+    }
+}
+
+/// Bounded local diagnostics: no coordinates, place names, identifiers or error bodies.
+/// Reading this file from the app container does not require system-log privileges.
+@MainActor
+enum GeofenceDiagnostics {
+    private struct Entry: Codable {
+        let timestamp: Date
+        let stage: String
+        let errorCode: Int?
+    }
+
+    static func record(_ stage: String, errorCode: Int? = nil) {
+        guard let directory = FileManager.default.urls(for: .cachesDirectory, in: .userDomainMask).first else { return }
+        let url = directory.appendingPathComponent("GeofenceDiagnostics.json")
+        do {
+            var entries = (try? JSONDecoder().decode([Entry].self, from: Data(contentsOf: url))) ?? []
+            entries.append(Entry(timestamp: Date(), stage: stage, errorCode: errorCode))
+            try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+            try JSONEncoder().encode(Array(entries.suffix(200))).write(to: url, options: .atomic)
+        } catch {
+            // Diagnostics must never stop a location fact from being persisted.
+        }
     }
 }

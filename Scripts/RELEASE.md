@@ -29,7 +29,7 @@
 
 应用源码有未提交改动时先停止，要求提交后执行，避免一个 commit 对应多份源码。源码范围由 `source_paths` 配置。不同 commit 不复用彼此的构建，不同 Bundle ID 的记录也相互隔离。默认从该 App 上一次成功上传的 commit 生成差异说明，首次使用则取配置中的 `initial_base`。
 
-更新说明来自提交标题，需要在脚本展示时核对；英文或内部实现标题可选择 `e` 打开文本编辑器改成用户文案。文案为空时必须填写。选择审核流程后，输入 `submit` 才执行资料写入及审核提交；审核通过后手动发布。
+更新说明来自提交标题，需要在脚本展示时核对；英文或内部实现标题可选择 `e` 打开文本编辑器改成用户文案。文案为空时必须填写。选择审核流程后，输入 `submit` 才执行资料写入及审核提交；提审前选择“审核通过后自动发布”或“审核通过后手动发布”，确认摘要会显示所选方式。选择按 Bundle ID + commit 保存，断点续跑可回车沿用，也可在提交前更改；变更方式时会重新同步 Apple 配置，不重复构建或上传。
 
 上传中断且结果不明时，脚本先查询 Apple：找到相同版本/构建则补完处理，不重复传包；尚未出现则保留进度并提示稍后重试。明确无效的构建需要修复代码并创建新 commit。提交中断时也会核对同一构建是否已进入审核。
 
@@ -59,6 +59,7 @@
 ```bash
 PYTHONDONTWRITEBYTECODE=1 python3 -m unittest discover -s Scripts/tests -p 'test_*.py'
 ruby Scripts/tests/release_version_test.rb
+ruby Scripts/tests/store_options_test.rb
 ruby -c fastlane/Fastfile
 bash -n appstore.sh
 git diff --check

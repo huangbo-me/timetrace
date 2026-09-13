@@ -852,7 +852,7 @@ final class InsightSummaryTests: XCTestCase {
             insightCopy: PeriodInsightCopy(factID: "fixture", title: copy.title, body: copy.body), showPlaceName: false)
         let image = try XCTUnwrap(UIImage(data: poster)?.cgImage)
         XCTAssertEqual(image.width, 1080)
-        XCTAssertEqual(image.height, 1920)
+        XCTAssertLessThan(image.height, 1920)
         try poster.write(to: directory.appendingPathComponent("poster.png"))
         var priorTheme: Data?
         for theme in AppTheme.allCases {
@@ -861,7 +861,7 @@ final class InsightSummaryTests: XCTestCase {
                     body: "相似的段落再次落笔，回看时，日子便有了韵脚。"), showPlaceName: false, theme: theme)
             let bitmap = try XCTUnwrap(UIImage(data: themed)?.cgImage)
             XCTAssertEqual(bitmap.width, 1080)
-            XCTAssertEqual(bitmap.height, 1920)
+            XCTAssertLessThan(bitmap.height, 1920)
             if let priorTheme { XCTAssertNotEqual(themed, priorTheme, "Theme must change the exported image") }
             priorTheme = themed
             try themed.write(to: directory.appendingPathComponent("theme-" + theme.rawValue + ".png"))

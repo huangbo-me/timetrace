@@ -37,31 +37,48 @@ struct JournalFindingDetail: View {
     }
 }
 
+/// Capture the page once so later refreshes cannot change an open share.
+struct InsightShareSnapshot: Identifiable {
+    let id = UUID()
+    let journal: TimeJournal
+    let copy: PeriodInsightCopy?
+    let trend: JournalTrendSnapshot
+}
+
+struct JournalTrendSnapshot {
+    let summary: PeriodActivitySummary
+    let metric: TrendMetric
+    let presentation: PlaceInsightPresentation
+    let calendar: Calendar
+    let now: Date
+}
+
 struct JournalSharePreview: View {
     @Environment(\.timeTraceDesign) private var design
 
     let journal: TimeJournal
     var insightCopy: PeriodInsightCopy? = nil
-    @State private var showPlaceName = false
+    var trend: JournalTrendSnapshot? = nil
     @State private var shareFile: JournalShareFile?
     @State private var error: String?
     @State private var rendering = false
     @State private var generatedFiles: [URL] = []
-    @State private var didGenerate = false
+    @State private var previewData: Data?
     @Environment(\.dismiss) private var dismiss
 
     var body: some View {
         NavigationStack {
             ScrollView {
                 VStack(spacing: 20) {
-                    // Display the actual fixed-size composition, scaled without reflowing text.
-                    GeometryReader { geometry in
-                        poster
-                            .scaleEffect(geometry.size.width / JournalPoster.size.width, anchor: .topLeading)
+                    if let previewData, let image = UIImage(data: previewData) {
+                        Image(uiImage: image)
+                            .resizable()
+                            .scaledToFit()
+                            .accessibilityLabel("分享海报预览")
+                    } else if error == nil {
+                        ProgressView("正在生成预览…")
+                            .frame(maxWidth: .infinity, minHeight: 160)
                     }
-                    .aspectRatio(JournalPoster.size.width / JournalPoster.size.height, contentMode: .fit)
-                    .accessibilityLabel("分享海报预览")
-                    Toggle("显示地点名称", isOn: $showPlaceName)
                     if let error {
                         Text(error).font(.caption).foregroundStyle(.red)
                     }
@@ -75,13 +92,12 @@ struct JournalSharePreview: View {
                     .disabled(rendering)
                 }.padding(20)
             }
-            .navigationTitle("分享手记").navigationBarTitleDisplayMode(.inline)
+            .navigationTitle("分享统计").navigationBarTitleDisplayMode(.inline)
             .toolbar { ToolbarItem(placement: .cancellationAction) { Button("关闭") { dismiss() } } }
             .sheet(item: $shareFile) { file in JournalActivitySheet(url: file.url) }
             .task {
-                guard !didGenerate else { return }
-                didGenerate = true
-                render()
+                guard previewData == nil else { return }
+                generatePreview()
             }
             .onDisappear {
                 for url in generatedFiles { try? FileManager.default.removeItem(at: url) }
@@ -89,8 +105,14 @@ struct JournalSharePreview: View {
         }
     }
 
-    private var poster: some View {
-        JournalPoster(journal: journal, insightCopy: insightCopy, showPlaceName: showPlaceName, theme: design.theme)
+    @MainActor private func generatePreview() {
+        error = nil
+        do {
+            previewData = try JournalPosterRenderer.png(journal: journal, insightCopy: insightCopy,
+                trend: trend, showPlaceName: false, theme: design.theme)
+        } catch {
+            self.error = "暂时无法生成图片，请重试。"
+        }
     }
 
     @MainActor private func render() {
@@ -99,7 +121,9 @@ struct JournalSharePreview: View {
         defer { rendering = false }
         do {
             let url = FileManager.default.temporaryDirectory.appendingPathComponent("时光落点手记-\(UUID().uuidString).png")
-            try JournalPosterRenderer.write(journal: journal, insightCopy: insightCopy, showPlaceName: showPlaceName, theme: design.theme, to: url)
+            if previewData == nil { generatePreview() }
+            guard let previewData else { return }
+            try previewData.write(to: url, options: .atomic)
             generatedFiles.append(url)
             shareFile = JournalShareFile(url: url)
         } catch {
@@ -122,77 +146,76 @@ private struct JournalActivitySheet: UIViewControllerRepresentable {
 
 /// Fixed typography makes the exported PNG identical to the scaled preview.
 struct JournalPoster: View {
-    static let size = CGSize(width: 360, height: 640)
+    static let width: CGFloat = 360
     let journal: TimeJournal
     var insightCopy: PeriodInsightCopy? = nil
+    var trend: JournalTrendSnapshot? = nil
     var showPlaceName = false
     var theme: AppTheme = .paper
     private var design: TimeTraceDesign { TimeTraceDesign(theme: theme) }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
-            VStack(alignment: .leading, spacing: 10) {
-                HStack(spacing: 6) {
-                    Capsule().fill(design.blue).frame(width: 16, height: 3)
-                    Text("一份来自日常的时间手记").tracking(2)
-                }
-                .font(.system(size: 10, weight: .medium))
-                .foregroundStyle(design.muted)
-                Text("时间花在哪，\n生活就写在哪。")
-                    .font(.system(size: 27, weight: .semibold, design: .serif))
-                    .lineSpacing(5)
+            HStack(alignment: .firstTextBaseline) {
+                Text("我的时间总结")
+                    .font(.system(size: 23, weight: .semibold, design: .serif))
                     .foregroundStyle(design.ink)
+                Spacer()
+                Text("TimeTrace")
+                    .font(.system(size: 11, weight: .medium))
+                    .foregroundStyle(design.muted)
             }
-            .fixedSize(horizontal: false, vertical: true)
 
-            Spacer(minLength: 24)
+            Color.clear.frame(height: 18)
 
             PeriodInsightCard(journal: journal, copy: insightCopy, showsEvidenceLink: false,
                               scopeLabel: showPlaceName ? journal.scope : journal.privateScope,
                               forSharing: true) {}
+                .compositingGroup()
                 .shadow(color: design.blue.opacity(0.08), radius: 16, x: 0, y: 8)
 
-            Spacer(minLength: 24)
-
-            HStack(alignment: .center, spacing: 16) {
+            if let trend {
                 VStack(alignment: .leading, spacing: 12) {
-                    HStack(spacing: 8) {
-                        TimeTraceMark(size: 32)
-                        VStack(alignment: .leading, spacing: 2) {
-                            Text("时光落点").font(.system(size: 19, weight: .semibold))
-                            Text("TimeTrace").font(.system(size: 10, weight: .medium))
-                        }
+                    Text("趋势 · \(trend.metric.title(for: trend.presentation))")
+                        .font(.system(size: 15, weight: .semibold))
                         .foregroundStyle(design.ink)
+                    PlaceTrendChart(summary: trend.summary, metric: trend.metric,
+                                    presentation: trend.presentation, calendar: trend.calendar, now: trend.now)
+                        .frame(height: 210)
+                    if trend.summary.days.contains(where: \.isIncomplete) {
+                        Label("橙色数据点表示记录不完整", systemImage: "circle.fill")
+                            .font(.system(size: 10)).foregroundStyle(.orange)
                     }
-                    Text("自动记录地点停留\n看见时间如何分配")
-                        .font(.system(size: 11))
-                        .lineSpacing(3)
-                        .foregroundStyle(design.muted)
-                    Text("把你的日常，也记录下来")
-                        .font(.system(size: 11, weight: .medium))
-                        .foregroundStyle(design.blue)
+                }
+                .padding(16)
+                .background(design.card, in: RoundedRectangle(cornerRadius: 24))
+                .overlay { RoundedRectangle(cornerRadius: 24).strokeBorder(design.border.opacity(0.65)) }
+                .padding(.top, 18)
+            }
+
+            Color.clear.frame(height: 18)
+
+            HStack(alignment: .center, spacing: 14) {
+                TimeTraceMark(size: 30)
+                VStack(alignment: .leading, spacing: 5) {
+                    Text("时光落点").font(.system(size: 17, weight: .semibold)).foregroundStyle(design.ink)
+                    Text("记录日常，看见时间").font(.system(size: 10)).foregroundStyle(design.muted)
                 }
                 Spacer(minLength: 0)
-                VStack(spacing: 6) {
-                    if let code = JournalDownloadCode.image {
-                        Image(uiImage: code)
-                            .interpolation(.none)
-                            .resizable()
-                            .frame(width: 84, height: 84)
-                            .accessibilityLabel("时光落点 App Store 下载二维码")
-                    }
-                    Text("扫码下载 · iPhone")
-                        .font(.system(size: 9, weight: .medium))
-                        .foregroundStyle(design.muted)
+                if let code = JournalDownloadCode.image {
+                    Image(uiImage: code)
+                        .interpolation(.none).resizable().frame(width: 60, height: 60)
+                        .accessibilityLabel("时光落点 App Store 下载二维码")
                 }
             }
-            .padding(.top, 16)
+            .padding(.top, 14)
             .overlay(alignment: .top) { Rectangle().fill(design.border).frame(height: 1) }
             .fixedSize(horizontal: false, vertical: true)
         }
-        .padding(.horizontal, 26)
-        .padding(.vertical, 48)
-        .frame(width: Self.size.width, height: Self.size.height)
+        .padding(.horizontal, 24)
+        .padding(.vertical, 28)
+        .frame(width: Self.width)
+        .fixedSize(horizontal: false, vertical: true)
         .background(design.canvas)
         .environment(\.timeTraceDesign, design)
         .environment(\.colorScheme, .light)
@@ -220,13 +243,13 @@ enum JournalDownloadCode {
 
 enum JournalPosterRenderer {
     enum RenderError: Error { case unavailable }
-    @MainActor static func write(journal: TimeJournal, insightCopy: PeriodInsightCopy? = nil, showPlaceName: Bool, theme: AppTheme = .paper, to url: URL) throws {
-        try png(journal: journal, insightCopy: insightCopy,
+    @MainActor static func write(journal: TimeJournal, insightCopy: PeriodInsightCopy? = nil, trend: JournalTrendSnapshot? = nil, showPlaceName: Bool, theme: AppTheme = .paper, to url: URL) throws {
+        try png(journal: journal, insightCopy: insightCopy, trend: trend,
                 showPlaceName: showPlaceName, theme: theme).write(to: url, options: .atomic)
     }
-    @MainActor static func png(journal: TimeJournal, insightCopy: PeriodInsightCopy? = nil, showPlaceName: Bool, theme: AppTheme = .paper) throws -> Data {
+    @MainActor static func png(journal: TimeJournal, insightCopy: PeriodInsightCopy? = nil, trend: JournalTrendSnapshot? = nil, showPlaceName: Bool, theme: AppTheme = .paper) throws -> Data {
         let renderer = ImageRenderer(content: JournalPoster(journal: journal,
-            insightCopy: insightCopy, showPlaceName: showPlaceName, theme: theme))
+            insightCopy: insightCopy, trend: trend, showPlaceName: showPlaceName, theme: theme))
         renderer.scale = 3
         renderer.isOpaque = true
         // Use a fresh bitmap context for each export, including repeated privacy/theme changes.
@@ -272,86 +295,266 @@ struct DailyCareCard: View {
 struct PeriodInsightCard: View {
     @Environment(\.timeTraceDesign) private var design
     @Environment(\.dynamicTypeSize) private var dynamicTypeSize
+    @ScaledMetric(relativeTo: .largeTitle) private var primaryNumberSize: CGFloat = 46
+    @ScaledMetric(relativeTo: .title2) private var secondaryNumberSize: CGFloat = 28
+    @ScaledMetric(relativeTo: .title2) private var clockNumberSize: CGFloat = 27
     let journal: TimeJournal
     var copy: PeriodInsightCopy?
     var showsEvidenceLink = true
     var scopeLabel: String? = nil
     var forSharing = false
+    var selectType: ((PlaceType) -> Void)? = nil
     var showEvidence: () -> Void
 
-    var body: some View {
-        if showsEvidenceLink && journal.mainFinding != nil {
-            Button(action: showEvidence) { content }
-                .buttonStyle(.plain)
-                .accessibilityHint("查看这条洞见对应的时间记录")
-        } else {
-            content
-        }
-    }
+    var body: some View { content }
 
     private var content: some View {
-        VStack(alignment: .leading, spacing: forSharing ? 14 : 20) {
+        let values = Dictionary(uniqueKeysWithValues: journal.summaryMetrics.map { ($0.title, $0.value) })
+        let hasWork = values["已工作"] != nil
+        let hasHome = values["在家待了"] != nil || values["最晚到家"] != nil
+        return VStack(alignment: .leading, spacing: forSharing ? 12 : 22) {
             Group {
-                if dynamicTypeSize.isAccessibilitySize {
+                if dynamicTypeSize.isAccessibilitySize && !forSharing {
                     VStack(alignment: .leading, spacing: 8) {
-                        Text(scopeLabel ?? "时间里的发现")
-                        Text(journal.dateLabel)
+                        Text(journal.dateLabel).foregroundStyle(design.muted)
+                        Text(scopeLabel ?? journal.scope).foregroundStyle(design.blue)
                     }
                 } else {
-                    HStack(alignment: .top) {
-                        Text(journal.dateLabel)
-                        Spacer()
-                        Text(scopeLabel ?? "时间里的发现")
-                            .lineLimit(forSharing ? 2 : nil)
+                    HStack(alignment: .firstTextBaseline, spacing: 12) {
+                        Text(journal.dateLabel).foregroundStyle(design.muted)
+                        Spacer(minLength: 0)
+                        Text(scopeLabel ?? journal.scope)
+                            .foregroundStyle(design.blue)
+                            .padding(.horizontal, 8).padding(.vertical, 4)
+                            .background(design.blue.opacity(0.07), in: Capsule())
                     }
                 }
             }
-            .font(.caption.weight(.medium))
-            .foregroundStyle(design.muted)
+            .font(forSharing ? .system(size: 10, weight: .medium) : .caption.weight(.medium))
             .fixedSize(horizontal: false, vertical: true)
 
-            Capsule().fill(design.blue).frame(width: 28, height: 3)
-            VStack(alignment: .leading, spacing: 12) {
-                Text(copy?.title ?? journal.insightTitle)
-                    .font(forSharing ? .system(size: 20, weight: .semibold, design: .serif) : .system(.title2, design: .serif, weight: .semibold))
-                    .foregroundStyle(design.ink)
-                Text(copy?.body ?? journal.insightBody)
-                    .font(forSharing ? .system(size: 14) : .subheadline)
-                    .foregroundStyle(design.muted)
-                    .lineSpacing(4)
-            }
-            .fixedSize(horizontal: false, vertical: true)
+            if journal.typeSummaries.count > 2 {
+                typeOverview
+            } else {
+                if hasWork {
+                    VStack(alignment: .leading, spacing: forSharing ? 12 : 16) {
+                        columns {
+                            durationMetric("已工作", value: values["已工作"]!, icon: "briefcase.fill", prominent: true)
+                        } second: {
+                            durationMetric("日均工作", value: values["平均每天工作"] ?? "—", prominent: false)
+                        }
+                        clockBand(first: "最晚下班", firstValue: values["最晚下班"],
+                                  second: "平均下班", secondValue: values["平均下班"])
+                    }
+                }
 
-            ViewThatFits(in: .horizontal) {
-                HStack(spacing: 18) { metrics }
-                VStack(alignment: .leading, spacing: 8) { metrics }
-            }
-            .font(.subheadline.weight(.medium))
-            .foregroundStyle(design.blue)
-            .padding(14)
-            .frame(maxWidth: .infinity, alignment: .leading)
-            .background(design.card, in: RoundedRectangle(cornerRadius: 14))
+                if hasHome {
+                    if hasWork { rule }
+                    VStack(alignment: .leading, spacing: forSharing ? 12 : 16) {
+                        durationMetric("在家时长", value: values["在家待了"] ?? "记录中",
+                                       icon: "house.fill", prominent: !hasWork)
+                        clockBand(first: "最晚到家", firstValue: values["最晚到家"],
+                                  second: "最早离家", secondValue: values["最早离家"])
+                    }
+                }
 
-            if journal.unfinishedCount > 0 {
-                Text("还有 \(journal.unfinishedCount) 段待结束，时长仅计已完成记录")
-                    .font(.caption).foregroundStyle(design.muted)
+                let primaryTitles: Set<String> = ["已工作", "平均每天工作", "最晚下班", "平均下班", "在家待了", "最晚到家", "最早离家"]
+                let otherMetrics = journal.summaryMetrics.filter { !primaryTitles.contains($0.title) }
+                if !otherMetrics.isEmpty {
+                    if hasWork || hasHome { rule }
+                    ForEach(otherMetrics) { metric in
+                        if metric.title == "记录摘要" {
+                            Text(metric.value).font(.subheadline).foregroundStyle(design.muted)
+                                .padding(.vertical, 12)
+                        } else {
+                            VStack(alignment: .leading, spacing: 10) {
+                                durationMetric(metric.title, value: metric.value, prominent: !hasWork && !hasHome)
+                                if let summary = journal.typeSummaries.first(where: { "\($0.type.displayName)时长" == metric.title }) {
+                                    Text("\(summary.detailTitle) · \(summary.detailValue)")
+                                        .font(forSharing ? .system(size: 11) : .caption)
+                                        .foregroundStyle(design.muted)
+                                }
+                            }
+                        }
+                    }
+                }
+
             }
-            if showsEvidenceLink && journal.mainFinding != nil {
-                Label("看看这些记录", systemImage: "arrow.up.right")
-                    .font(.caption.weight(.semibold)).foregroundStyle(design.blue)
+
+            if let copy {
+                VStack(alignment: .leading, spacing: 5) {
+                    Text(copy.title).font(forSharing ? .system(size: 13, weight: .semibold) : .subheadline.weight(.semibold))
+                        .foregroundStyle(design.ink)
+                    Text(copy.body).font(forSharing ? .system(size: 12) : .caption)
+                        .foregroundStyle(design.muted).lineSpacing(3)
+                }
+                .fixedSize(horizontal: false, vertical: true)
+            }
+
+            if journal.unfinishedCount > 0 || showsEvidenceLink {
+                Group {
+                    if dynamicTypeSize.isAccessibilitySize && !forSharing {
+                        VStack(alignment: .leading, spacing: 10) { footerContent }
+                    } else {
+                        HStack(alignment: .firstTextBaseline, spacing: 12) { footerContent }
+                    }
+                }
+                .font(forSharing ? .system(size: 10) : .caption2)
+                .fixedSize(horizontal: false, vertical: true)
             }
         }
-        .padding(forSharing ? 18 : 22)
+        .padding(forSharing ? 16 : 22)
         .frame(maxWidth: .infinity, alignment: .leading)
-        .background {
-            LinearGradient(colors: [design.canvas, design.card], startPoint: .topLeading, endPoint: .bottomTrailing)
-        }
-        .clipShape(RoundedRectangle(cornerRadius: 24))
-        .overlay { RoundedRectangle(cornerRadius: 24).strokeBorder(design.blue.opacity(0.18)) }
+        .background(design.card, in: RoundedRectangle(cornerRadius: 24))
+        .overlay { RoundedRectangle(cornerRadius: 24).strokeBorder(design.border.opacity(0.65)) }
     }
 
-    @ViewBuilder private var metrics: some View {
-        Text("已完成 \(TimeJournalService.duration(journal.totalDuration))")
-        Text("\(journal.recordedDays) 天 · \(journal.recordCount) 段记录")
+    @ViewBuilder private var footerContent: some View {
+        if journal.unfinishedCount > 0 {
+            Text("进行中的时长尚未计入").foregroundStyle(design.muted)
+        }
+        if !dynamicTypeSize.isAccessibilitySize || forSharing { Spacer(minLength: 0) }
+        if showsEvidenceLink && (journal.summaryEvidence != nil || journal.mainFinding != nil) {
+            Button(action: showEvidence) {
+                HStack(spacing: 4) {
+                    Text("查看记录")
+                    Image(systemName: "arrow.up.right")
+                }
+                .padding(.vertical, 8)
+                .contentShape(Rectangle())
+            }
+            .buttonStyle(.plain)
+            .foregroundStyle(design.blue)
+        }
+    }
+
+    private var typeOverview: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            if !forSharing && selectType != nil {
+                Text("点选类型，查看完整总结")
+                    .font(.caption).foregroundStyle(design.muted)
+            }
+            let count = forSharing ? 3 : dynamicTypeSize.isAccessibilitySize ? 1 : 2
+            LazyVGrid(columns: Array(repeating: GridItem(.flexible(), spacing: 8, alignment: .leading), count: count),
+                      alignment: .leading, spacing: 8) {
+                ForEach(journal.typeSummaries) { summary in
+                    if let selectType, !forSharing {
+                        Button { selectType(summary.type) } label: { overviewTile(summary) }
+                            .buttonStyle(.plain)
+                            .accessibilityHint("查看完整总结")
+                    } else {
+                        overviewTile(summary)
+                    }
+                }
+            }
+        }
+    }
+
+    private func overviewTile(_ summary: JournalTypeSummary) -> some View {
+        VStack(alignment: .leading, spacing: forSharing ? 7 : 10) {
+            Label(summary.type.displayName, systemImage: summary.type.systemImage)
+                .font(forSharing ? .system(size: 10, weight: .medium) : .caption.weight(.medium))
+                .foregroundStyle(design.blue)
+            (
+                Text(summary.number)
+                    .font(.system(size: forSharing ? 23 : secondaryNumberSize, weight: .semibold, design: .rounded))
+                    .foregroundColor(design.ink)
+                + Text(" " + summary.unit)
+                    .font(forSharing ? .system(size: 9) : .caption)
+                    .foregroundColor(design.muted)
+            )
+            .lineLimit(1).minimumScaleFactor(0.7)
+            VStack(alignment: .leading, spacing: 3) {
+                Text(summary.detailTitle).foregroundStyle(design.muted)
+                Text(summary.detailValue).foregroundStyle(design.ink)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+            .font(forSharing ? .system(size: 9) : .caption2)
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .padding(forSharing ? 8 : 12)
+        .frame(maxHeight: .infinity, alignment: .topLeading)
+        .background(design.canvas, in: RoundedRectangle(cornerRadius: 12))
+        .contentShape(RoundedRectangle(cornerRadius: 12))
+        .accessibilityElement(children: .ignore)
+        .accessibilityLabel("\(summary.type.displayName)，\(summary.durationDescription)，\(summary.detailTitle)\(summary.detailValue)")
+    }
+
+    private var rule: some View {
+        Rectangle().fill(design.border.opacity(0.65)).frame(height: 1)
+    }
+
+    @ViewBuilder private func columns<First: View, Second: View>(
+        @ViewBuilder first: () -> First, @ViewBuilder second: () -> Second
+    ) -> some View {
+        if dynamicTypeSize.isAccessibilitySize && !forSharing {
+            VStack(alignment: .leading, spacing: 18) { first(); second() }
+        } else {
+            HStack(alignment: .bottom, spacing: 14) {
+                first().frame(maxWidth: .infinity, alignment: .leading)
+                second().frame(maxWidth: .infinity, alignment: .leading)
+            }
+        }
+    }
+
+    private func durationMetric(_ title: String, value: String, icon: String? = nil, prominent: Bool) -> some View {
+        VStack(alignment: .leading, spacing: forSharing ? 5 : 7) {
+            HStack(spacing: 5) {
+                if let icon { Image(systemName: icon).foregroundStyle(design.blue) }
+                Text(title)
+            }
+            .font(forSharing ? .system(size: 11, weight: .medium) : .caption.weight(.medium))
+            .foregroundStyle(design.muted)
+            durationText(value, prominent: prominent)
+                .lineLimit(1)
+                .minimumScaleFactor(0.6)
+                .fixedSize(horizontal: false, vertical: true)
+                .accessibilityLabel(title + value)
+        }
+    }
+
+    private func durationText(_ value: String, prominent: Bool) -> Text {
+        let size: CGFloat = prominent ? (forSharing ? 40 : primaryNumberSize) : (forSharing ? 24 : secondaryNumberSize)
+        return value.split(separator: " ").reduce(Text("")) { text, part in
+            if Int(part) != nil {
+                return text + Text(String(part))
+                    .font(.system(size: size, weight: .semibold, design: .rounded))
+                    .foregroundColor(design.ink)
+            }
+            return text + Text(" " + String(part) + " ")
+                .font(forSharing ? .system(size: 11) : .caption)
+                .foregroundColor(design.muted)
+        }
+    }
+
+    private func clockBand(first: String, firstValue: String?, second: String, secondValue: String?) -> some View {
+        columns {
+            clockMetric(first, value: firstValue)
+        } second: {
+            clockMetric(second, value: secondValue)
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .padding(forSharing ? 10 : 14)
+        .background(design.canvas, in: RoundedRectangle(cornerRadius: 14))
+    }
+
+    private func clockMetric(_ title: String, value: String?) -> some View {
+        let parts = value?.split(separator: " ").map(String.init) ?? []
+        let time = parts.last ?? "—"
+        let context = parts.dropLast().joined(separator: " ")
+        return VStack(alignment: .leading, spacing: 5) {
+            Text(title)
+                .font(forSharing ? .system(size: 10) : .caption)
+                .foregroundStyle(design.muted)
+            Text(time)
+                .font(.system(size: forSharing ? 23 : clockNumberSize, weight: .semibold, design: .rounded))
+                .monospacedDigit().foregroundStyle(design.ink)
+                .lineLimit(1).minimumScaleFactor(0.8)
+            Text(context.isEmpty ? (value == nil ? "暂无完整记录" : "当天") : context)
+                .font(forSharing ? .system(size: 10) : .caption2)
+                .foregroundStyle(design.blue)
+        }
+        .accessibilityElement(children: .ignore)
+        .accessibilityLabel(title + (value ?? "暂无完整记录"))
     }
 }

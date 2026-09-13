@@ -1,5 +1,6 @@
 import importlib.util
 import json
+import hashlib
 import os
 from pathlib import Path
 import tempfile
@@ -61,6 +62,48 @@ class AppstoreTests(unittest.TestCase):
                 appstore.upload(state, {})
                 self.assertEqual(step.call_count, 1)
                 self.assertEqual(step.call_args.args[0], 'upload')
+
+    def review_fixture(self, directory, previous=None):
+        file = Path(directory) / 'state.json'
+        notes = Path(directory) / 'release-notes.txt'
+        notes.write_text('修复记录显示')
+        state = {'uploaded': True, 'version': '1.2', 'build': '123', '_path': file}
+        if previous:
+            state.update(release_mode=previous, metadata_release_mode=previous,
+                         metadata_sha256=hashlib.sha256(notes.read_bytes()).hexdigest())
+        appstore.persist(state)
+        return state
+
+    def test_release_choice_is_saved_and_changed_mode_updates_metadata(self):
+        with tempfile.TemporaryDirectory() as directory:
+            state = self.review_fixture(directory, 'manual')
+            with patch.object(appstore, 'confirm_notes'), patch('builtins.input', side_effect=['1', 'submit']), patch.object(appstore, 'step') as step:
+                appstore.review(state, {})
+            self.assertEqual(state['release_mode'], 'automatic')
+            self.assertEqual(json.loads(state['_path'].read_text())['release_mode'], 'automatic')
+            self.assertEqual([c.args[0] for c in step.call_args_list], ['metadata', 'submit'])
+
+    def test_unchanged_mode_resumes_without_rewriting_metadata(self):
+        with tempfile.TemporaryDirectory() as directory:
+            state = self.review_fixture(directory, 'automatic')
+            with patch.object(appstore, 'confirm_notes'), patch('builtins.input', side_effect=['', 'submit']), patch.object(appstore, 'step') as step:
+                appstore.review(state, {})
+            self.assertEqual([c.args[0] for c in step.call_args_list], ['submit'])
+
+    def test_first_selection_has_no_silent_default_and_supports_manual(self):
+        with tempfile.TemporaryDirectory() as directory:
+            state = self.review_fixture(directory)
+            with patch('builtins.input', side_effect=['', 'invalid', '2']):
+                self.assertEqual(appstore.choose_release_mode(state), '审核通过后手动发布')
+            self.assertEqual(state['release_mode'], 'manual')
+
+    def test_cancel_after_release_choice_does_not_write_to_apple(self):
+        with tempfile.TemporaryDirectory() as directory:
+            state = self.review_fixture(directory)
+            with patch.object(appstore, 'confirm_notes'), patch('builtins.input', side_effect=['1', 'no']), patch.object(appstore, 'step') as step:
+                appstore.review(state, {})
+            step.assert_not_called()
+            self.assertNotIn('submit_started', state)
 
 
 if __name__ == '__main__':

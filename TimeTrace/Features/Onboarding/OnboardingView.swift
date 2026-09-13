@@ -1,6 +1,55 @@
 import CoreLocation
 import MapKit
 import SwiftUI
+import UIKit
+
+/// Observe background taps without taking touches away from Form controls.
+struct WorkplaceKeyboardDismissGesture: UIGestureRecognizerRepresentable {
+    var dismiss: () -> Void
+
+    func makeUIGestureRecognizer(context: Context) -> UITapGestureRecognizer {
+        let recognizer = UITapGestureRecognizer()
+        recognizer.cancelsTouchesInView = false
+        recognizer.delegate = context.coordinator
+        return recognizer
+    }
+
+    func updateUIGestureRecognizer(_ recognizer: UITapGestureRecognizer, context: Context) {}
+
+    func handleUIGestureRecognizerAction(_ recognizer: UITapGestureRecognizer, context: Context) {
+        if recognizer.state == .ended { dismiss() }
+    }
+
+    func makeCoordinator(converter: CoordinateSpaceConverter) -> Coordinator {
+        Coordinator()
+    }
+
+    final class Coordinator: NSObject, UIGestureRecognizerDelegate {
+        func gestureRecognizer(_ gestureRecognizer: UIGestureRecognizer, shouldReceive touch: UITouch) -> Bool {
+            // A tap inside an input must keep focus, including its text selection views.
+            var view = touch.view
+            while let current = view {
+                if current is UITextField || current is UITextView || current is UIControl {
+                    return false
+                }
+                view = current.superview
+            }
+            return true
+        }
+
+        func gestureRecognizer(
+            _ gestureRecognizer: UIGestureRecognizer,
+            shouldRecognizeSimultaneouslyWith otherGestureRecognizer: UIGestureRecognizer
+        ) -> Bool {
+            true
+        }
+    }
+}
+
+enum WorkplaceInputField: Hashable {
+    case placeName
+    case addressQuery
+}
 
 struct OnboardingView: View {
     @Environment(\.timeTraceDesign) private var design
@@ -21,6 +70,7 @@ struct OnboardingView: View {
     @State private var useNormalHours = true
     @State private var normalStart = Calendar.current.date(from: DateComponents(hour: 9)) ?? Date()
     @State private var normalEnd = Calendar.current.date(from: DateComponents(hour: 18)) ?? Date()
+    @FocusState private var focusedField: WorkplaceInputField?
     @State private var locating = false
     @State private var locationAccuracy: CLLocationAccuracy?
     @State private var usesReducedAccuracy = false
@@ -49,6 +99,9 @@ struct OnboardingView: View {
 
                 Section("地点") {
                     TextField("地点名称，例如：公司、办公室或客户现场", text: $placeName)
+                        .focused($focusedField, equals: .placeName)
+                        .submitLabel(.done)
+                        .onSubmit { focusedField = nil }
                     Button {
                         Task { await useCurrentLocation() }
                     } label: {
@@ -58,7 +111,8 @@ struct OnboardingView: View {
 
                     WorkplaceAddressSearch(
                         coordinate: $coordinate,
-                        position: $position
+                        position: $position,
+                        focusedField: $focusedField
                     )
                     LabeledContent("围栏半径", value: "\(Int(radius)) 米")
                     Slider(value: $radius, in: 10...1000, step: 10)
@@ -74,6 +128,7 @@ struct OnboardingView: View {
                         radius: $radius,
                         height: 260
                     )
+                    .simultaneousGesture(TapGesture().onEnded { focusedField = nil })
                     LocationAccuracyNotice(
                         horizontalAccuracy: locationAccuracy,
                         usesReducedAccuracy: usesReducedAccuracy
@@ -110,6 +165,9 @@ struct OnboardingView: View {
                     Text("系统会先请求使用期间定位；完成后会继续请求“始终允许”和通知权限，用于后台围栏记录与进出通知。")
                 }
             }
+            .contentShape(Rectangle())
+            .gesture(WorkplaceKeyboardDismissGesture { focusedField = nil })
+            .scrollDismissesKeyboard(.interactively)
             .scrollContentBackground(.hidden)
             .timeTraceScreen()
             .background(design.canvas)
@@ -301,6 +359,8 @@ struct WorkplaceAddressSearch: View {
     @Binding var coordinate: CLLocationCoordinate2D
     @Binding var position: MapCameraPosition
 
+    var focusedField: FocusState<WorkplaceInputField?>.Binding
+
     @State private var query = ""
     @State private var city = ""
     @State private var cityDraft = ""
@@ -337,6 +397,7 @@ struct WorkplaceAddressSearch: View {
 
             HStack(spacing: 8) {
                 TextField("搜索地点、园区或地址", text: $query)
+                    .focused(focusedField, equals: .addressQuery)
                     .textInputAutocapitalization(.never)
                     .autocorrectionDisabled()
                     .submitLabel(.search)
@@ -405,6 +466,7 @@ struct WorkplaceAddressSearch: View {
 
     @MainActor
     private func search() async {
+        focusedField.wrappedValue = nil
         let trimmedQuery = query.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmedQuery.isEmpty, !isSearching, !isDeterminingCity else { return }
         guard let searchCenter = searchOrigin else {
@@ -422,16 +484,18 @@ struct WorkplaceAddressSearch: View {
             longitudinalMeters: 50_000
         )
         let cityPrefix = city.trimmingCharacters(in: .whitespacesAndNewlines)
-        let request = MKGeocodingRequest(addressString: cityPrefix.isEmpty ? trimmedQuery : "\(cityPrefix) \(trimmedQuery)")
-        request?.region = region
-        request?.preferredLocale = TimeTraceLocalization.locale
+        // Local search includes named places and entrances; geocoding may only
+        // resolve the administrative district for the same query.
+        let request = MKLocalSearch.Request()
+        request.naturalLanguageQuery = cityPrefix.isEmpty || trimmedQuery.contains(cityPrefix)
+            ? trimmedQuery
+            : "\(cityPrefix) \(trimmedQuery)"
+        request.region = region
+        request.resultTypes = [.address, .pointOfInterest]
 
         do {
-            guard let request else {
-                message = "无法创建地址搜索，请稍后重试。"
-                return
-            }
-            let mapItems = try await request.mapItems
+            let response = try await MKLocalSearch(request: request).start()
+            let mapItems = response.mapItems
             results = Array(mapItems.prefix(6)).map { item in
                 let name = item.name ?? item.address?.shortAddress ?? "搜索结果"
                 let address = item.address?.fullAddress ?? ""
@@ -444,6 +508,8 @@ struct WorkplaceAddressSearch: View {
             message = results.isEmpty
                 ? "没有找到匹配地址，请使用当前位置或在地图上选择。"
                 : "请选择搜索结果，并在地图上确认位置"
+        } catch let error as MKError where error.code == .placemarkNotFound {
+            message = "没有找到匹配地址，请使用当前位置或在地图上选择。"
         } catch {
             message = "搜索失败，请检查网络，或使用当前位置。"
         }
@@ -451,6 +517,7 @@ struct WorkplaceAddressSearch: View {
     }
 
     private func select(_ result: WorkplaceSearchResult) {
+        focusedField.wrappedValue = nil
         coordinate = ChinaMapCoordinateConverter.systemCoordinate(fromMapCoordinate: result.mapCoordinate)
         position = .camera(MapCamera(centerCoordinate: result.mapCoordinate, distance: 1_200))
         query = result.name

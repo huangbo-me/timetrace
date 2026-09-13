@@ -50,6 +50,7 @@ final class AppModel: ObservableObject {
     @Published private(set) var geofenceCapabilityStatus: PlatformCapabilityStatus = .needsAuthorization
     @Published private(set) var notificationCapabilityStatus: PlatformCapabilityStatus = .needsAuthorization
     @Published var lastError: String?
+    @Published private var sessionsObservedOutside = Set<UUID>()
 
     let geofence: GeofenceServicing
     let notifications: NotificationServicing
@@ -99,7 +100,11 @@ final class AppModel: ObservableObject {
             return "请先在地点页添加或启用地点"
         }
         switch geofenceCapabilityStatus {
-        case .available: return "已配置地点围栏；系统检测到进出时自动记录，休息日也会记录"
+        case .available:
+            if !sessionsObservedOutside.isEmpty {
+                return "地点状态与记录不一致，可能漏记离开；请到历史记录补齐离开时间"
+            }
+            return "已配置地点围栏；系统检测到进出时自动记录，休息日也会记录"
         case .needsAuthorization: return "请在系统设置中允许“始终”定位，以使用后台自动记录"
         case .restricted: return "定位权限不可用，请在系统设置中检查定位授权"
         case .unavailable(let message): return message
@@ -994,6 +999,7 @@ final class AppModel: ObservableObject {
         triggers = try activityRepository.fetchTriggers(activityId: nil)
         events = try eventRepository.fetchAll()
         sessions = try sessionRepository.fetch(activityId: nil).filter { $0.deletedAt == nil }
+        sessionsObservedOutside.formIntersection(Set(sessions.filter { $0.endAt == nil }.map(\.id)))
         reminders = try reminderRepository.fetchDefinitions()
         reminderInstances = try reminderRepository.fetchInstances()
     }
@@ -1088,7 +1094,10 @@ final class AppModel: ObservableObject {
                 monitoringBeganInside = monitoringBeganInsideTriggerIDs.remove(id) != nil
             }
             guard let trigger = try activityRepository.fetchTriggers(activityId: nil)
-                .first(where: { $0.id == triggerId && $0.type == .geofence && $0.isEnabled && !$0.isDemoData }) else { return }
+                .first(where: { $0.id == triggerId && $0.type == .geofence && $0.isEnabled && !$0.isDemoData }) else {
+                GeofenceDiagnostics.record("event.ignored.invalidTrigger")
+                return
+            }
             let activityId = trigger.activityId
             var metadata = timeZoneMetadata()
             metadata.values["placeTriggerId"] = trigger.id.uuidString
@@ -1100,6 +1109,7 @@ final class AppModel: ObservableObject {
                                       timestamp: timestamp, source: .coreLocation, metadata: metadata)
             _ = try pipeline.ingest(event, timeZoneIdentifier: trigger.timeZoneIdentifier)
             refreshPublishedData()
+            GeofenceDiagnostics.record("event.\(type.rawValue).\(event.disposition.rawValue)")
             guard event.disposition == .applied else { return }
             let activityName = (try activityRepository.fetch(id: activityId))?.name ?? "工作"
             let placeName = trigger.displayPlaceName
@@ -1111,16 +1121,31 @@ final class AppModel: ObservableObject {
                     placeName: placeName
                 )
             }
-        } catch { lastError = TimeTraceLocalization.errorMessage(error, fallback: "保存定位事件失败，请稍后重试。") }
+        } catch {
+            GeofenceDiagnostics.record("event.persistenceFailure", errorCode: (error as NSError).code)
+            lastError = TimeTraceLocalization.errorMessage(error, fallback: "保存定位事件失败，请稍后重试。")
+        }
     }
 
     private func handleGeofenceRegionState(triggerId: UUID, state: CLRegionState) {
-        guard state == .inside else { return }
-        let hasActiveSession = (try? sessionRepository.fetch(activityId: nil))?.contains {
-            $0.placeTriggerId == triggerId && $0.deletedAt == nil && $0.endAt == nil
-        } ?? false
-        guard !hasActiveSession else { return }
-        monitoringBeganInsideTriggerIDs.insert(triggerId)
+        do {
+            let openSessions = try sessionRepository.fetch(activityId: nil).filter {
+                $0.placeTriggerId == triggerId && $0.deletedAt == nil && $0.endAt == nil
+            }
+            if state == .outside {
+                monitoringBeganInsideTriggerIDs.remove(triggerId)
+                // A state observation proves absence now, not the exact exit time.
+                // Keep source records intact and ask for a user correction.
+                if !openSessions.isEmpty {
+                    sessionsObservedOutside.formUnion(openSessions.map(\.id))
+                    GeofenceDiagnostics.record("state.outside.openSessionMismatch")
+                }
+            } else if state == .inside && openSessions.isEmpty {
+                monitoringBeganInsideTriggerIDs.insert(triggerId)
+            }
+        } catch {
+            GeofenceDiagnostics.record("state.readFailure", errorCode: (error as NSError).code)
+        }
     }
 
     /// Registration is an adapter concern. Persisting a place must not depend

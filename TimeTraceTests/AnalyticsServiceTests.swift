@@ -193,9 +193,9 @@ final class AnalyticsServiceTests: XCTestCase {
         let later = TodayHeroSummary(sessions: values, places: [home, office],
             workActivityIDs: [activityId], now: now.addingTimeInterval(1), calendar: calendar)
         XCTAssertEqual(summary.activeSession?.id, activeHome.id)
-        XCTAssertEqual(summary.label, "今日累计居住时长")
+        XCTAssertEqual(summary.label, "本次在家时长")
         XCTAssertEqual(summary.systemImage, "house.fill")
-        XCTAssertEqual(summary.duration, 9 * 3600)
+        XCTAssertEqual(summary.duration, 1 * 3600)
         XCTAssertEqual(later.duration - summary.duration, 1)
         activeHome.endAt = now
         activeHome.status = .completed
@@ -242,13 +242,13 @@ final class AnalyticsServiceTests: XCTestCase {
         }
     }
 
-    func testHeroClipsOvernightHomeToToday() {
+    func testHeroKeepsOvernightHomeVisitContinuous() {
         let home = ActivityTrigger(activityId: activityId, type: .geofence, placeType: .home)
         let overnight = ActivitySession(activityId: activityId, placeTriggerId: home.id,
             startAt: date(day: 1, hour: 22), status: .active)
         let summary = TodayHeroSummary(sessions: [overnight], places: [home],
             workActivityIDs: [activityId], now: date(day: 2, hour: 8), calendar: calendar)
-        XCTAssertEqual(summary.duration, 8 * 3600)
+        XCTAssertEqual(summary.duration, 10 * 3600)
         XCTAssertEqual(summary.activeSession?.id, overnight.id)
     }
 
@@ -304,6 +304,157 @@ final class TimeJournalServiceTests: XCTestCase {
             previous: DateInterval(start: date(0), end: date(7)), filter: filter,
             calendar: calendar, now: now ?? date(14))
     }
+    func testSummaryMetricsSeparateWorkAndHomeAndUseActualClockExtremes() throws {
+        let work = ActivityTrigger(activityId: activityID, type: .geofence, placeType: .work)
+        let home = ActivityTrigger(activityId: activityID, type: .geofence, placeType: .home)
+        let records = [
+            ActivitySession(activityId: activityID, placeTriggerId: work.id,
+                startAt: date(7, 9), endAt: date(7, 18), status: .completed),
+            ActivitySession(activityId: activityID, placeTriggerId: work.id,
+                startAt: date(8, 20), endAt: date(9, 1), status: .completed),
+            ActivitySession(activityId: activityID, placeTriggerId: home.id,
+                startAt: date(7, 23), endAt: date(8, 6), status: .completed),
+            ActivitySession(activityId: activityID, placeTriggerId: home.id,
+                startAt: date(9, 20), endAt: date(10, 8), status: .completed),
+            ActivitySession(activityId: activityID, placeTriggerId: home.id,
+                startAt: date(11, 21), status: .active)
+        ]
+        let result = journal(records, places: [work, home])
+        let metrics = Dictionary(uniqueKeysWithValues: result.summaryMetrics.map { ($0.title, $0.value) })
+        XCTAssertEqual(metrics["已工作"], TimeJournalService.duration(14 * 3600))
+        XCTAssertEqual(metrics["平均每天工作"], "7 小时")
+        XCTAssertEqual(metrics["平均下班"], "21:30")
+        XCTAssertEqual(metrics["在家待了"], TimeJournalService.duration(19 * 3600))
+        XCTAssertEqual(metrics["最晚下班"], "9月9日 01:00")
+        XCTAssertEqual(metrics["最晚到家"], "9月7日 23:00")
+        XCTAssertEqual(metrics["最早离家"], "9月8日 06:00")
+        XCTAssertEqual(result.unfinishedCount, 1)
+        XCTAssertEqual(result.summaryEvidence?.records.count, 5)
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent("summary-visuals")
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        try JournalPosterRenderer.png(journal: result, showPlaceName: false)
+            .write(to: directory.appendingPathComponent("work-home-poster.png"))
+        let renderer = ImageRenderer(content: PeriodInsightCard(journal: result) {}
+            .frame(width: 350).environment(\.colorScheme, .light))
+        renderer.scale = 2
+        try XCTUnwrap(renderer.uiImage?.pngData()).write(to: directory.appendingPathComponent("work-home-card.png"))
+        let layoutWork = [12, 12, 12, 13, 13].enumerated().map { index, hours in
+            ActivitySession(activityId: activityID, placeTriggerId: work.id, startAt: date(7 + index, 11),
+                endAt: date(7 + index, 11).addingTimeInterval(Double(hours) * 3600), status: .completed)
+        }
+        let layoutJournal = journal(layoutWork + records.filter { $0.placeTriggerId == home.id }, places: [work, home])
+        XCTAssertEqual(layoutJournal.summaryMetrics.first { $0.title == "最晚下班" }?.value, "9月12日 00:00",
+                       "相同最晚钟点选择最近日期，保证卡片与分享多次渲染一致")
+        let layoutCopy = PeriodInsightCopy(factID: "layout", title: "日子的留白", body: "工作之外，也记得留一点时间给自己。")
+        for (name, width, size, scheme) in [
+            ("layout-light", 350.0, DynamicTypeSize.large, ColorScheme.light),
+            ("layout-dark", 350.0, DynamicTypeSize.large, ColorScheme.dark),
+            ("layout-accessible", 335.0, DynamicTypeSize.accessibility3, ColorScheme.light)
+        ] {
+            let renderer = ImageRenderer(content: PeriodInsightCard(journal: layoutJournal, copy: layoutCopy) {}
+                .frame(width: width).environment(\.dynamicTypeSize, size).environment(\.colorScheme, scheme))
+            renderer.scale = 2
+            try XCTUnwrap(renderer.uiImage?.pngData()).write(to: directory.appendingPathComponent(name + ".png"))
+        }
+        try JournalPosterRenderer.png(journal: layoutJournal, insightCopy: layoutCopy, showPlaceName: false)
+            .write(to: directory.appendingPathComponent("layout-poster.png"))
+        print("SUMMARY_VISUAL_PATH=\(directory.path)")
+        let filtered = journal(records, places: [work, home], filter: .forType(.home, places: [work, home]))
+        XCTAssertFalse(filtered.summaryMetrics.contains { $0.title == "已工作" })
+        XCTAssertEqual(filtered.summaryMetrics.count, 3)
+        XCTAssertFalse(journal([record(7)]).summaryMetrics.contains { $0.title == "已工作" })
+    }
+
+    func testAllTypesOverviewAndShareStayComplete() throws {
+        let places = PlaceType.allCases.map {
+            ActivityTrigger(activityId: activityID, type: .geofence, placeType: $0)
+        }
+        let records = places.enumerated().flatMap { index, place in
+            (7...9).map { day in
+                ActivitySession(activityId: activityID, placeTriggerId: place.id,
+                    startAt: date(day, 9),
+                    endAt: date(day, 9).addingTimeInterval(Double(index + 1) * 3_600 + 1_740),
+                    status: .completed)
+            }
+        }
+        let result = journal(records, places: places)
+        XCTAssertEqual(result.typeSummaries.map(\.type), PlaceType.allCases)
+        XCTAssertEqual(result.typeSummaries.first?.number, "4.4")
+        XCTAssertEqual(result.typeSummaries.first?.detailValue, "1 小时 29 分钟")
+        let work = journal(records, places: places, filter: .forType(.work, places: places))
+        XCTAssertEqual(work.typeSummaries.map(\.type), [.work])
+        XCTAssertEqual(work.summaryMetrics.count, 4)
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent("all-types-visuals")
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        for (name, size) in [("all-types", DynamicTypeSize.large), ("all-types-accessible", .accessibility3)] {
+            let renderer = ImageRenderer(content: PeriodInsightCard(journal: result, selectType: { _ in }) {}
+                .frame(width: 350).environment(\.dynamicTypeSize, size))
+            renderer.scale = 2
+            try XCTUnwrap(renderer.uiImage?.pngData()).write(to: directory.appendingPathComponent(name + ".png"))
+        }
+        let copy = PeriodInsightCopy(factID: "layout", title: "时间里的日常", body: "工作、休息与生活，都在这里留下了记录。")
+        for (name, value) in [("all-types-poster", result), ("work-poster", work),
+                               ("three-types-poster", journal(records, places: Array(places.prefix(3)),
+                                filter: .all))] {
+            let data = try JournalPosterRenderer.png(journal: value, insightCopy: copy, showPlaceName: false)
+            try data.write(to: directory.appendingPathComponent(name + ".png"))
+            let bitmap = try XCTUnwrap(UIImage(data: data)?.cgImage)
+            XCTAssertEqual(bitmap.width, 1080)
+            XCTAssertGreaterThan(bitmap.height, 0)
+            let detector = try XCTUnwrap(CIDetector(ofType: CIDetectorTypeQRCode, context: nil,
+                options: [CIDetectorAccuracy: CIDetectorAccuracyHigh]))
+            let codes = detector.features(in: CIImage(cgImage: bitmap))
+                .compactMap { ($0 as? CIQRCodeFeature)?.messageString }
+            XCTAssertTrue(codes.contains(JournalDownloadCode.url), "完整页脚二维码必须保留")
+        }
+        let active = journal([ActivitySession(activityId: activityID, placeTriggerId: places[0].id,
+            startAt: date(13, 9), status: .active)], places: places)
+        XCTAssertEqual(active.typeSummaries.first?.number, "—")
+        XCTAssertEqual(active.typeSummaries.first?.detailValue, "等待记录结束")
+        print("ALL_TYPES_VISUAL_PATH=\(directory.path)")
+    }
+
+    func testLatestHomeArrivalTreatsEarlyMorningAsTheEndOfThePreviousEvening() {
+        let home = ActivityTrigger(activityId: activityID, type: .geofence, placeType: .home)
+        func visit(_ day: Int, _ hour: Int, _ minute: Int = 0) -> ActivitySession {
+            let start = calendar.date(byAdding: .minute, value: minute, to: date(day, hour))!
+            return ActivitySession(activityId: activityID, placeTriggerId: home.id, startAt: start,
+                endAt: start.addingTimeInterval(3600), status: .completed)
+        }
+        let visits = [visit(7, 23), visit(8, 0), visit(9, 2, 16), visit(10, 6)]
+        let result = journal(visits, places: [home])
+        XCTAssertEqual(result.summaryMetrics.first { $0.title == "最晚到家" }?.value, "9月9日 02:16")
+        let beforeDawn = journal(visits + [visit(11, 5, 59)], places: [home])
+        XCTAssertEqual(beforeDawn.summaryMetrics.first { $0.title == "最晚到家" }?.value, "9月11日 05:59")
+        let midnight = journal([visit(7, 23), visit(8, 0)], places: [home])
+        XCTAssertEqual(midnight.summaryMetrics.first { $0.title == "最晚到家" }?.value, "9月8日 00:00")
+        // Earliest departure remains a comparison of the actual morning clock.
+        XCTAssertEqual(result.summaryMetrics.first { $0.title == "最早离家" }?.value, "9月8日 00:00")
+    }
+
+    func testWorkConclusionsCombineDailyVisitsAndExcludeUnfinishedDaysFromAverages() {
+        let work = ActivityTrigger(activityId: activityID, type: .geofence, placeType: .work)
+        func visit(_ day: Int, _ start: Int, _ endDay: Int, _ end: Int) -> ActivitySession {
+            ActivitySession(activityId: activityID, placeTriggerId: work.id,
+                startAt: date(day, start), endAt: date(endDay, end), status: .completed)
+        }
+        let values = [visit(7, 9, 7, 12), visit(7, 13, 7, 23), visit(8, 20, 9, 1),
+                      visit(9, 9, 9, 12), ActivitySession(activityId: activityID,
+                        placeTriggerId: work.id, startAt: date(9, 14), status: .active)]
+        let result = journal(values, places: [work], now: date(9, 16))
+        let metrics = Dictionary(uniqueKeysWithValues: result.summaryMetrics.map { ($0.title, $0.value) })
+        XCTAssertEqual(metrics["已工作"], "21 小时")
+        XCTAssertEqual(metrics["平均每天工作"], "9 小时")
+        XCTAssertEqual(metrics["最晚下班"], "9月9日 01:00")
+        XCTAssertEqual(metrics["平均下班"], "次日 00:00")
+        XCTAssertEqual(result.summaryParagraphs, [
+            "已工作21 小时，平均每天工作9 小时。",
+            "最晚在9月9日 01:00下班，平均次日 00:00下班。"
+        ])
+        let unfinished = journal([values.last!], places: [work], now: date(9, 16))
+        XCTAssertFalse(unfinished.summaryMetrics.contains { $0.title == "平均每天工作" || $0.title == "平均下班" })
+    }
+
     func testEmptyAndSparseRecordsDoNotInventPatterns() {
         let empty = journal([])
         XCTAssertFalse(empty.canShare)
@@ -433,7 +584,7 @@ final class TimeJournalServiceTests: XCTestCase {
         let data = try JournalPosterRenderer.png(journal: result, showPlaceName: false)
         let image = try XCTUnwrap(UIImage(data: data)?.cgImage)
         XCTAssertEqual(image.width, 1080)
-        XCTAssertEqual(image.height, 1920)
+        XCTAssertLessThan(image.height, 1920, "单卡片分享应按内容收紧高度")
         let directory = FileManager.default.temporaryDirectory.appendingPathComponent("journal-visual-check", isDirectory: true)
         try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
         try data.write(to: directory.appendingPathComponent("poster.png"))
@@ -476,12 +627,31 @@ final class TimeJournalServiceTests: XCTestCase {
                 Int(bytes[$0]) + Int(bytes[$0 + 1]) + Int(bytes[$0 + 2]) < 450
             }.count
         }
-        for region in [CGRect(x: 78, y: 220, width: 800, height: 195),
-                       CGRect(x: 78, y: 1480, width: 550, height: 280)] {
+        XCTAssertGreaterThan(longImage.height, image.height, "长文案应自然增加海报高度")
+        for (region, longRegion) in [
+            (CGRect(x: 72, y: 85, width: 800, height: 105), CGRect(x: 72, y: 85, width: 800, height: 105)),
+            (CGRect(x: 72, y: image.height - 240, width: 650, height: 140),
+             CGRect(x: 72, y: longImage.height - 240, width: 650, height: 140))
+        ] {
             let expected = try inkPixels(image, in: region)
             XCTAssertGreaterThan(expected, 1000)
-            XCTAssertGreaterThanOrEqual(try inkPixels(longImage, in: region), expected * 9 / 10,
+            XCTAssertGreaterThanOrEqual(try inkPixels(longImage, in: longRegion), expected * 9 / 10,
                 "Long copy and repeat exports must preserve the headline and brand")
+        }
+
+        let trendSummary = AnalyticsService().periodSummary(sessions: values, activityId: nil,
+            interval: DateInterval(start: date(7), end: date(14)),
+            previous: DateInterval(start: date(0), end: date(7)),
+            placeFilter: .place(place.id), calendar: calendar)
+        for metric in TrendMetric.allCases {
+            let trend = JournalTrendSnapshot(summary: trendSummary, metric: metric,
+                presentation: PlaceInsightPresentation(type: .study), calendar: calendar, now: date(14))
+            let png = try JournalPosterRenderer.png(journal: result, insightCopy: longCopy,
+                trend: trend, showPlaceName: false)
+            let bitmap = try XCTUnwrap(UIImage(data: png)?.cgImage)
+            XCTAssertEqual(bitmap.width, 1080)
+            XCTAssertLessThan(bitmap.height, 2820, "总结与趋势之间不应撑开大块留白")
+            try png.write(to: directory.appendingPathComponent("summary-trend-\(metric.rawValue).png"))
         }
 
         print("JOURNAL_VISUAL_PATH=\(directory.path)")

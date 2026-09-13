@@ -99,7 +99,8 @@ struct TodayHeroSummary {
     let sessions: [ActivitySession]
     let duration: TimeInterval
     let firstArrivalTime: Date?
-    var label: String { "今日累计\(activePlace?.placeType.displayName ?? "工作")时长" }
+    var label: String { activePlace?.placeType == .home && activeSession != nil
+        ? "本次在家时长" : "今日累计\(activePlace?.placeType.displayName ?? "工作")时长" }
     var systemImage: String { activePlace?.placeType.systemImage ?? "location.fill" }
 
     init(sessions: [ActivitySession], places: [ActivityTrigger], workActivityIDs: Set<UUID>,
@@ -110,6 +111,12 @@ struct TodayHeroSummary {
         }.max { $0.startAt < $1.startAt }
         activeSession = currentSession
         activePlace = places.first { $0.id == currentSession?.placeTriggerId }
+        if activePlace?.placeType == .home, let currentSession {
+            self.sessions = [currentSession]
+            duration = max(0, now.timeIntervalSince(currentSession.startAt))
+            firstArrivalTime = currentSession.startAt
+            return
+        }
         let selectedType = activePlace?.placeType ?? .work
         let dayStart = calendar.startOfDay(for: now)
         let selectedSessions = sessions.filter { session in
@@ -247,8 +254,10 @@ struct TodayView: View {
                         .font(.system(size: 29, weight: .bold, design: .rounded))
                 }
                 if let arrival = heroSummary.firstArrivalTime {
-                    Text(arrival < Calendar.current.startOfDay(for: now)
-                         ? "今日从 00:00 累计" : "到达 \(TimeTraceFormat.time.string(from: arrival))")
+                    Text(activePlaceType == .home && active
+                         ? "到家 \(arrival.formatted(.dateTime.month().day().hour().minute().locale(TimeTraceLocalization.locale)))"
+                         : (arrival < Calendar.current.startOfDay(for: now)
+                            ? "今日从 00:00 累计" : "到达 \(TimeTraceFormat.time.string(from: arrival))"))
                         .font(.caption.weight(.medium)).foregroundStyle(.white.opacity(0.82))
                 }
             }
