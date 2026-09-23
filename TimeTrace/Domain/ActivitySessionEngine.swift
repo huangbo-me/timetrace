@@ -47,7 +47,9 @@ struct ActivitySessionEngine {
         for correction in ordered where correction.eventType == .sessionAdjusted || correction.eventType == .sessionDeleted {
             let values = correction.metadata.values
             let startID = UUID(uuidString: values["startEventId"] ?? "")
-                ?? UUID(uuidString: values["sessionId"] ?? "").flatMap { sessionByID[$0]?.startEventId }
+                ?? UUID(uuidString: values["sessionId"] ?? "").flatMap {
+                    sessionByID[$0].map { $0.startEventId ?? $0.id }
+                }
             guard let startID else { correction.disposition = .orphaned; continue }
             correctionsByStart[startID, default: []].append(correction)
         }
@@ -255,9 +257,7 @@ struct ActivitySessionEngine {
     }
 
     private func allowsExtendedDuration(for event: ActivityEvent) -> Bool {
-        guard event.eventType == .geofenceEnter else { return false }
-        let placeType = event.metadata.values["placeType"].flatMap(PlaceType.init(rawValue:))
-        return placeType.map { $0 != .work } ?? false
+        event.eventType == .geofenceEnter
     }
 
     private func geofencePlaceId(for event: ActivityEvent) -> UUID? {
@@ -300,9 +300,30 @@ struct ActivitySessionEngine {
         func parseDate(_ raw: String) -> Date? {
             formatter.date(from: raw) ?? ISO8601DateFormatter().date(from: raw)
         }
-        // Only the latest adjustment describes the intended boundaries. A
+        let scheduleEvents = events.filter {
+            $0.eventType == .sessionAdjusted &&
+            $0.metadata.values["adjustmentKind"] == WorkScheduleSnapshot.adjustmentKind
+        }
+        for event in scheduleEvents {
+            event.disposition = .applied
+        }
+        let timeAdjustment = events.last(where: {
+            $0.eventType == .sessionAdjusted &&
+            $0.metadata.values["adjustmentKind"] != WorkScheduleSnapshot.adjustmentKind
+        })
+        // Older app versions interpret every sessionAdjusted event as a time
+        // edit. Repair that derived status after an upgrade while preserving a
+        // genuine boundary correction whenever its event is present.
+        let wasStartedByGeofence = session.startEventId.flatMap { eventsByID[$0]?.eventType } == .geofenceEnter
+        if timeAdjustment == nil, !scheduleEvents.isEmpty, wasStartedByGeofence,
+           session.status == .manuallyAdjusted, session.endAt != nil {
+            session.status = .completed
+            session.confidence = .confirmed
+            session.updatedAt = now
+        }
+        // Only the latest time adjustment describes the intended boundaries. A
         // deletion remains a tombstone regardless of subsequent replay.
-        if let event = events.last(where: { $0.eventType == .sessionAdjusted }) {
+        if let event = timeAdjustment {
             let values = event.metadata.values
             if let startRaw = values["newStart"], let startAt = parseDate(startRaw) {
                 let endAt = values["newEnd"].flatMap { $0.isEmpty ? nil : parseDate($0) }

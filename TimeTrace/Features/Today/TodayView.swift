@@ -99,8 +99,16 @@ struct TodayHeroSummary {
     let sessions: [ActivitySession]
     let duration: TimeInterval
     let firstArrivalTime: Date?
-    var label: String { activePlace?.placeType == .home && activeSession != nil
-        ? "本次在家时长" : "今日累计\(activePlace?.placeType.displayName ?? "工作")时长" }
+    var label: String {
+        guard activeSession != nil, let type = activePlace?.placeType else {
+            return "今日累计工作时长"
+        }
+        switch type {
+        case .home: return "本次在家时长"
+        case .work: return "本次工作时长"
+        default: return "今日累计\(type.displayName)时长"
+        }
+    }
     var systemImage: String { activePlace?.placeType.systemImage ?? "location.fill" }
 
     init(sessions: [ActivitySession], places: [ActivityTrigger], workActivityIDs: Set<UUID>,
@@ -111,7 +119,8 @@ struct TodayHeroSummary {
         }.max { $0.startAt < $1.startAt }
         activeSession = currentSession
         activePlace = places.first { $0.id == currentSession?.placeTriggerId }
-        if activePlace?.placeType == .home, let currentSession {
+        if let currentSession,
+           activePlace?.placeType == .home || activePlace?.placeType == .work {
             self.sessions = [currentSession]
             duration = max(0, now.timeIntervalSince(currentSession.startAt))
             firstArrivalTime = currentSession.startAt
@@ -254,8 +263,8 @@ struct TodayView: View {
                         .font(.system(size: 29, weight: .bold, design: .rounded))
                 }
                 if let arrival = heroSummary.firstArrivalTime {
-                    Text(activePlaceType == .home && active
-                         ? "到家 \(arrival.formatted(.dateTime.month().day().hour().minute().locale(TimeTraceLocalization.locale)))"
+                    Text((activePlaceType == .home || activePlaceType == .work) && active
+                         ? "\(activePlaceType == .home ? "到家" : "到达") \(arrival.formatted(.dateTime.month().day().hour().minute().locale(TimeTraceLocalization.locale)))"
                          : (arrival < Calendar.current.startOfDay(for: now)
                             ? "今日从 00:00 累计" : "到达 \(TimeTraceFormat.time.string(from: arrival))"))
                         .font(.caption.weight(.medium)).foregroundStyle(.white.opacity(0.82))

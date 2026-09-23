@@ -252,6 +252,209 @@ final class AnalyticsServiceTests: XCTestCase {
         XCTAssertEqual(summary.activeSession?.id, overnight.id)
     }
 
+    func testHeroKeepsOvernightWorkVisitContinuous() {
+        let office = ActivityTrigger(activityId: activityId, type: .geofence, placeType: .work)
+        let overnight = ActivitySession(activityId: activityId, placeTriggerId: office.id,
+            startAt: date(day: 1, hour: 22), status: .active)
+        let summary = TodayHeroSummary(sessions: [overnight], places: [office],
+            workActivityIDs: [activityId], now: date(day: 2, hour: 15), calendar: calendar)
+        XCTAssertEqual(summary.label, "本次工作时长")
+        XCTAssertEqual(summary.duration, 17 * 3600)
+        XCTAssertEqual(summary.firstArrivalTime, overnight.startAt)
+    }
+
+    func testNightShiftSplitsEarlyAndLateOvertime() throws {
+        let schedule = try XCTUnwrap(WorkScheduleSnapshot(
+            weekdaysMask: 0b1111111, startMinute: 22 * 60, endMinute: 8 * 60,
+            timeZoneIdentifier: "UTC", isEnabled: true
+        ))
+        let result = try XCTUnwrap(WorkScheduleCalculator.breakdown(
+            from: date(day: 1, hour: 21, minute: 30),
+            to: date(day: 2, hour: 15), schedule: schedule
+        ))
+        XCTAssertEqual(result.normalDuration, 10 * 3600, accuracy: 0.1)
+        XCTAssertEqual(result.earlyOvertime, 30 * 60, accuracy: 0.1)
+        XCTAssertEqual(result.lateOvertime, 7 * 3600, accuracy: 0.1)
+        XCTAssertEqual(result.restDayOvertime, 0, accuracy: 0.1)
+        XCTAssertEqual(result.totalOvertime, 7.5 * 3600, accuracy: 0.1)
+    }
+
+    func testMultiDayScheduleRepeatsWithoutDoubleCounting() throws {
+        let schedule = try XCTUnwrap(WorkScheduleSnapshot(
+            weekdaysMask: 0b1111111, startMinute: 9 * 60, endMinute: 17 * 60,
+            timeZoneIdentifier: "UTC", isEnabled: true
+        ))
+        let result = try XCTUnwrap(WorkScheduleCalculator.breakdown(
+            from: date(day: 1, hour: 8), to: date(day: 3, hour: 18), schedule: schedule
+        ))
+        XCTAssertEqual(result.normalDuration, 24 * 3600, accuracy: 0.1)
+        XCTAssertEqual(result.earlyOvertime, 1 * 3600, accuracy: 0.1)
+        XCTAssertEqual(result.lateOvertime, 33 * 3600, accuracy: 0.1)
+        XCTAssertEqual(result.restDayOvertime, 0, accuracy: 0.1)
+        XCTAssertEqual(result.totalOvertime, 34 * 3600, accuracy: 0.1)
+    }
+
+    func testUnselectedDayIsEntirelyRestDayOvertime() throws {
+        let mondayOnly = 1 << (2 - 1)
+        let schedule = try XCTUnwrap(WorkScheduleSnapshot(
+            weekdaysMask: mondayOnly, startMinute: 9 * 60, endMinute: 18 * 60,
+            timeZoneIdentifier: "UTC", isEnabled: true
+        ))
+        // 2026-09-01 is Tuesday.
+        let result = try XCTUnwrap(WorkScheduleCalculator.breakdown(
+            from: date(day: 1, hour: 9), to: date(day: 1, hour: 17), schedule: schedule
+        ))
+        XCTAssertEqual(result.normalDuration, 0, accuracy: 0.1)
+        XCTAssertEqual(result.restDayOvertime, 8 * 3600, accuracy: 0.1)
+        XCTAssertEqual(result.totalOvertime, 8 * 3600, accuracy: 0.1)
+    }
+
+    func testLateArrivalAndEarlyDepartureDoNotCreateOvertime() throws {
+        let schedule = try XCTUnwrap(WorkScheduleSnapshot(
+            weekdaysMask: 0b1111111, startMinute: 9 * 60, endMinute: 18 * 60,
+            timeZoneIdentifier: "UTC", isEnabled: true
+        ))
+        let result = try XCTUnwrap(WorkScheduleCalculator.breakdown(
+            from: date(day: 1, hour: 10), to: date(day: 1, hour: 17), schedule: schedule
+        ))
+        XCTAssertEqual(result.normalDuration, 7 * 3600, accuracy: 0.1)
+        XCTAssertEqual(result.totalOvertime, 0, accuracy: 0.1)
+    }
+
+    func testDayShiftUsesWallClockAcrossDSTTransitions() throws {
+        let timeZoneIdentifier = "America/New_York"
+        let schedule = try XCTUnwrap(WorkScheduleSnapshot(
+            weekdaysMask: 0b1111111, startMinute: 9 * 60, endMinute: 18 * 60,
+            timeZoneIdentifier: timeZoneIdentifier, isEnabled: true
+        ))
+        for (month, day) in [(3, 8), (11, 1)] {
+            let start = localDate(year: 2026, month: month, day: day, hour: 9,
+                                  timeZoneIdentifier: timeZoneIdentifier)
+            let end = localDate(year: 2026, month: month, day: day, hour: 18,
+                                timeZoneIdentifier: timeZoneIdentifier)
+            let result = try XCTUnwrap(WorkScheduleCalculator.breakdown(
+                from: start, to: end, schedule: schedule
+            ))
+            XCTAssertEqual(result.normalDuration, end.timeIntervalSince(start), accuracy: 0.1)
+            XCTAssertEqual(result.totalOvertime, 0, accuracy: 0.1)
+        }
+    }
+
+    func testOvernightShiftUsesWallClockAcrossDSTTransitions() throws {
+        let timeZoneIdentifier = "America/New_York"
+        let schedule = try XCTUnwrap(WorkScheduleSnapshot(
+            weekdaysMask: 0b1111111, startMinute: 22 * 60, endMinute: 8 * 60,
+            timeZoneIdentifier: timeZoneIdentifier, isEnabled: true
+        ))
+        for (startMonth, startDay, endMonth, endDay) in [(3, 7, 3, 8), (10, 31, 11, 1)] {
+            let start = localDate(year: 2026, month: startMonth, day: startDay, hour: 22,
+                                  timeZoneIdentifier: timeZoneIdentifier)
+            let end = localDate(year: 2026, month: endMonth, day: endDay, hour: 8,
+                                timeZoneIdentifier: timeZoneIdentifier)
+            let result = try XCTUnwrap(WorkScheduleCalculator.breakdown(
+                from: start, to: end, schedule: schedule
+            ))
+            XCTAssertEqual(result.normalDuration, end.timeIntervalSince(start), accuracy: 0.1)
+            XCTAssertEqual(result.totalOvertime, 0, accuracy: 0.1)
+        }
+    }
+
+    func testScheduleSnapshotRejectsUnknownTimeZone() {
+        XCTAssertNil(WorkScheduleSnapshot(
+            weekdaysMask: 0b1111111, startMinute: 9 * 60, endMinute: 18 * 60,
+            timeZoneIdentifier: "Mars/Olympus_Mons", isEnabled: true
+        ))
+    }
+
+    func testCrossDayCountUsesCalendarBoundaries() {
+        XCTAssertEqual(SessionDaySpan.crossedDayCount(
+            from: date(day: 1, hour: 23, minute: 30),
+            to: date(day: 2, hour: 0, minute: 30), timeZoneIdentifier: "UTC"
+        ), 1)
+        XCTAssertEqual(SessionDaySpan.crossedDayCount(
+            from: date(day: 1, hour: 1), to: date(day: 1, hour: 23),
+            timeZoneIdentifier: "UTC"
+        ), 0)
+    }
+
+    func testScheduleResolverPrefersRevisionThenEntryThenCurrentPlace() throws {
+        let place = ActivityTrigger(activityId: activityId, type: .geofence, placeType: .work,
+                                    weekdaysMask: 0b0111110, normalStartMinute: 9 * 60,
+                                    normalEndMinute: 18 * 60, timeZoneIdentifier: "UTC")
+        let entrySnapshot = try XCTUnwrap(WorkScheduleSnapshot(
+            weekdaysMask: 0b0111110, startMinute: 10 * 60, endMinute: 19 * 60,
+            timeZoneIdentifier: "UTC", isEnabled: true
+        ))
+        let start = ActivityEvent(activityId: activityId, eventType: .geofenceEnter,
+                                  timestamp: date(day: 1, hour: 9), source: .coreLocation,
+                                  metadata: entrySnapshot.adding(to: EventMetadata(values: [
+                                    "placeTriggerId": place.id.uuidString
+                                  ])))
+        let session = ActivitySession(activityId: activityId, placeTriggerId: place.id,
+                                      startAt: start.timestamp, startEventId: start.id)
+        XCTAssertEqual(WorkScheduleResolver.snapshot(for: session, events: [start], currentPlace: place),
+                       entrySnapshot)
+
+        let revisedSnapshot = try XCTUnwrap(WorkScheduleSnapshot(
+            weekdaysMask: 0b1111111, startMinute: 22 * 60, endMinute: 8 * 60,
+            timeZoneIdentifier: "UTC", isEnabled: true
+        ))
+        var revisionMetadata = EventMetadata(values: [
+            "adjustmentKind": WorkScheduleSnapshot.adjustmentKind,
+            "sessionId": session.id.uuidString,
+            "startEventId": start.id.uuidString
+        ])
+        revisionMetadata = revisedSnapshot.adding(to: revisionMetadata)
+        let revision = ActivityEvent(activityId: activityId, eventType: .sessionAdjusted,
+                                     timestamp: date(day: 2, hour: 20), source: .user,
+                                     metadata: revisionMetadata)
+        XCTAssertEqual(WorkScheduleResolver.snapshot(
+            for: session, events: [start, revision], currentPlace: place
+        ), revisedSnapshot)
+
+        let legacy = ActivitySession(activityId: activityId, placeTriggerId: place.id,
+                                     startAt: date(day: 1, hour: 9))
+        XCTAssertEqual(WorkScheduleResolver.snapshot(for: legacy, events: [], currentPlace: place),
+                       place.workScheduleSnapshot)
+        let manual = ActivitySession(activityId: activityId, startAt: date(day: 1, hour: 9))
+        XCTAssertNil(WorkScheduleResolver.snapshot(for: manual, events: [], currentPlace: place))
+    }
+
+    func testScheduleResolverDoesNotFallbackPastLatestMalformedRevision() throws {
+        let place = ActivityTrigger(activityId: activityId, type: .geofence, placeType: .work,
+                                    weekdaysMask: 0b0111110, normalStartMinute: 9 * 60,
+                                    normalEndMinute: 18 * 60, timeZoneIdentifier: "UTC")
+        let entrySnapshot = try XCTUnwrap(WorkScheduleSnapshot(
+            weekdaysMask: 0b0111110, startMinute: 10 * 60, endMinute: 19 * 60,
+            timeZoneIdentifier: "UTC", isEnabled: true
+        ))
+        let start = ActivityEvent(activityId: activityId, eventType: .geofenceEnter,
+                                  timestamp: date(day: 1, hour: 9), source: .coreLocation,
+                                  metadata: entrySnapshot.adding(to: EventMetadata(values: [
+                                    "placeTriggerId": place.id.uuidString
+                                  ])))
+        let session = ActivitySession(activityId: activityId, placeTriggerId: place.id,
+                                      startAt: start.timestamp, startEventId: start.id)
+        let malformedRevision = ActivityEvent(
+            activityId: activityId, eventType: .sessionAdjusted,
+            timestamp: date(day: 2, hour: 20), source: .user,
+            metadata: EventMetadata(values: [
+                "adjustmentKind": WorkScheduleSnapshot.adjustmentKind,
+                "sessionId": session.id.uuidString,
+                "startEventId": start.id.uuidString,
+                "workScheduleEnabled": "true",
+                "workScheduleWeekdaysMask": "127",
+                "workScheduleStartMinute": "540",
+                "workScheduleEndMinute": "1080",
+                "workScheduleTimeZoneIdentifier": "Mars/Olympus_Mons"
+            ])
+        )
+
+        XCTAssertNil(WorkScheduleResolver.snapshot(
+            for: session, events: [start, malformedRevision], currentPlace: place
+        ))
+    }
+
     func testTodayManualWorkAndMissingPlaceClassification() {
         let manualWork = session(day: 1, start: 9, end: 10)
         let study = ActivitySession(activityId: UUID(), startAt: date(day: 1, hour: 9),
@@ -276,8 +479,17 @@ final class AnalyticsServiceTests: XCTestCase {
         DateInterval(start: date(day: day, hour: 0), end: date(day: day + length, hour: 0))
     }
 
-    private func date(day: Int, hour: Int) -> Date {
-        calendar.date(from: DateComponents(year: 2026, month: 9, day: day, hour: hour))!
+    private func date(day: Int, hour: Int, minute: Int = 0) -> Date {
+        calendar.date(from: DateComponents(year: 2026, month: 9, day: day, hour: hour, minute: minute))!
+    }
+
+    private func localDate(year: Int, month: Int, day: Int, hour: Int,
+                           timeZoneIdentifier: String) -> Date {
+        var localCalendar = Calendar(identifier: .gregorian)
+        localCalendar.timeZone = TimeZone(identifier: timeZoneIdentifier)!
+        return localCalendar.date(from: DateComponents(
+            year: year, month: month, day: day, hour: hour
+        ))!
     }
 }
 

@@ -32,6 +32,20 @@ final class SwiftDataActivityRepository: ActivityRepository {
         try context.save()
     }
 
+    func save(_ trigger: ActivityTrigger, appending events: [ActivityEvent]) throws {
+        do {
+            let triggers = try context.fetch(FetchDescriptor<ActivityTrigger>())
+            if !triggers.contains(where: { $0.id == trigger.id }) { context.insert(trigger) }
+            let existingEventIDs = Set(try context.fetch(FetchDescriptor<ActivityEvent>()).map(\.id))
+            for event in events where !existingEventIDs.contains(event.id) { context.insert(event) }
+            trigger.updatedAt = Date()
+            try context.save()
+        } catch {
+            context.rollback()
+            throw error
+        }
+    }
+
     func delete(_ trigger: ActivityTrigger) throws {
         context.delete(trigger)
         try context.save()

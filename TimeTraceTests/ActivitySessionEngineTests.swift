@@ -179,8 +179,22 @@ final class ActivitySessionEngineTests: XCTestCase {
         XCTAssertNil(result.sessions[0].endAt)
     }
 
-    func testMissingExitBecomesIncompleteAfter24Hours() {
-        let result = engine.reconcile(events: [event(.geofenceEnter, 9)], existingSessions: [],
+    func testWorkGeofenceRemainsActiveAfter24HoursUntilExit() {
+        let place = UUID()
+        let start = geofenceEvent(
+            .geofenceEnter,
+            placeId: place,
+            hour: 9,
+            metadata: ["placeType": PlaceType.work.rawValue]
+        )
+        let result = engine.reconcile(events: [start], existingSessions: [],
+                                      now: date(day: 2, hour: 10))
+        XCTAssertEqual(result.sessions[0].status, .active)
+        XCTAssertNil(result.sessions[0].endAt)
+    }
+
+    func testManualSessionBecomesIncompleteAfter24Hours() {
+        let result = engine.reconcile(events: [event(.manualStart, 9, source: .user)], existingSessions: [],
                                       now: date(day: 2, hour: 10))
         XCTAssertEqual(result.sessions[0].status, .incomplete)
         XCTAssertNil(result.sessions[0].endAt)
@@ -352,6 +366,71 @@ final class ActivitySessionEngineTests: XCTestCase {
         XCTAssertEqual(result.sessions[0].endAt, date(day: 1, hour: 17))
         XCTAssertEqual(result.sessions[0].endEventId, end.id)
         XCTAssertEqual(end.disposition, .applied)
+    }
+
+    func testWorkScheduleRevisionDoesNotAdjustSessionBoundariesOrOriginStatus() {
+        let placeID = UUID()
+        let start = geofenceEvent(.geofenceEnter, placeId: placeID, hour: 9)
+        let end = geofenceEvent(.geofenceExit, placeId: placeID, hour: 18)
+        let initial = engine.reconcile(events: [start, end], existingSessions: [],
+                                       now: date(day: 1, hour: 19)).sessions[0]
+        var metadata = EventMetadata(values: [
+            "adjustmentKind": WorkScheduleSnapshot.adjustmentKind,
+            "sessionId": initial.id.uuidString,
+            "startEventId": start.id.uuidString,
+            "newStart": initial.startAt.ISO8601Format(),
+            "newEnd": initial.endAt!.ISO8601Format()
+        ])
+        metadata = WorkScheduleSnapshot(
+            weekdaysMask: 0b0111110, startMinute: 9 * 60, endMinute: 18 * 60,
+            timeZoneIdentifier: "UTC", isEnabled: true
+        )!.adding(to: metadata)
+        let revision = ActivityEvent(activityId: activityId, eventType: .sessionAdjusted,
+                                     timestamp: date(day: 1, hour: 20), source: .user,
+                                     metadata: metadata)
+        let result = engine.reconcile(events: [start, end, revision], existingSessions: [initial],
+                                      now: date(day: 1, hour: 21)).sessions[0]
+        XCTAssertEqual(result.startAt, start.timestamp)
+        XCTAssertEqual(result.endAt, end.timestamp)
+        XCTAssertEqual(result.status, .completed)
+        XCTAssertEqual(revision.disposition, .applied)
+    }
+
+    func testScheduleRevisionRepairsOldClientManualStatusWithoutHidingRealCorrection() {
+        let placeID = UUID()
+        let start = geofenceEvent(.geofenceEnter, placeId: placeID, hour: 9)
+        let end = geofenceEvent(.geofenceExit, placeId: placeID, hour: 18)
+        let projected = engine.reconcile(events: [start, end], existingSessions: [],
+                                         now: date(day: 1, hour: 19)).sessions[0]
+        projected.status = .manuallyAdjusted // An old client applied the schedule event as a time edit.
+        var metadata = EventMetadata(values: [
+            "adjustmentKind": WorkScheduleSnapshot.adjustmentKind,
+            "sessionId": projected.id.uuidString,
+            "startEventId": start.id.uuidString,
+            "newStart": projected.startAt.ISO8601Format(),
+            "newEnd": projected.endAt!.ISO8601Format()
+        ])
+        metadata = WorkScheduleSnapshot(
+            weekdaysMask: 0b0111110, startMinute: 9 * 60, endMinute: 18 * 60,
+            timeZoneIdentifier: "UTC", isEnabled: true
+        )!.adding(to: metadata)
+        let scheduleRevision = ActivityEvent(
+            activityId: activityId, eventType: .sessionAdjusted,
+            timestamp: date(day: 1, hour: 20), source: .user, metadata: metadata
+        )
+        let repaired = engine.reconcile(events: [start, end, scheduleRevision],
+                                        existingSessions: [projected],
+                                        now: date(day: 1, hour: 21)).sessions[0]
+        XCTAssertEqual(repaired.status, .completed)
+
+        let realCorrection = adjustment(repaired, start: date(day: 1, hour: 8),
+                                        end: end.timestamp, hour: 22)
+        let genuinelyAdjusted = engine.reconcile(
+            events: [start, end, scheduleRevision, realCorrection],
+            existingSessions: [repaired], now: date(day: 1, hour: 23)
+        ).sessions[0]
+        XCTAssertEqual(genuinelyAdjusted.status, .manuallyAdjusted)
+        XCTAssertEqual(genuinelyAdjusted.startAt, date(day: 1, hour: 8))
     }
 
     private func adjustment(_ session: ActivitySession, start: Date, end: Date?, hour: Int) -> ActivityEvent {

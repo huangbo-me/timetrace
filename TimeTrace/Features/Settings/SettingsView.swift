@@ -548,9 +548,14 @@ struct WorkplaceEditorView: View {
     @State private var placeName = ""
     @State private var placeType: PlaceType = .work
     @State private var placeEnabled = true
+    @State private var weekdaysMask: Int
+    @State private var useNormalHours: Bool
+    @State private var normalStart: Date
+    @State private var normalEnd: Date
     @State private var locationAccuracy: CLLocationAccuracy?
     @State private var usesReducedAccuracy = false
     @State private var showingDeleteConfirmation = false
+    @State private var showingScheduleScopeConfirmation = false
     let trigger: ActivityTrigger?
 
     private var model: AppModel { store.application }
@@ -564,6 +569,10 @@ struct WorkplaceEditorView: View {
             distance: 1_500
         )))
         _radius = State(initialValue: 200)
+        _weekdaysMask = State(initialValue: trigger?.weekdaysMask ?? 0b0111110)
+        _useNormalHours = State(initialValue: trigger?.normalStartMinute != nil && trigger?.normalEndMinute != nil)
+        _normalStart = State(initialValue: Self.date(for: trigger?.normalStartMinute ?? 9 * 60))
+        _normalEnd = State(initialValue: Self.date(for: trigger?.normalEndMinute ?? 18 * 60))
     }
 
     var body: some View {
@@ -583,6 +592,24 @@ struct WorkplaceEditorView: View {
                         ForEach(PlaceType.allCases) { type in
                             Label(type.displayName, systemImage: type.systemImage).tag(type)
                         }
+                    }
+                }
+                if placeType == .work {
+                    Section {
+                        WeekdayPicker(mask: $weekdaysMask)
+                        Toggle("设置正常工作时间", isOn: $useNormalHours)
+                        if useNormalHours {
+                            DatePicker("上班", selection: $normalStart, displayedComponents: .hourAndMinute)
+                            DatePicker("下班", selection: $normalEnd, displayedComponents: .hourAndMinute)
+                            if minuteOfDay(normalStart) == minuteOfDay(normalEnd) {
+                                Text("上班时间和下班时间不能相同。")
+                                    .font(.caption).foregroundStyle(.red)
+                            }
+                        }
+                    } header: {
+                        Text("常规安排")
+                    } footer: {
+                        Text("用于计算正常工时和加班。结束时间早于开始时间时，视为次日下班。")
                     }
                 }
                 Section("定位地点") {
@@ -643,35 +670,20 @@ struct WorkplaceEditorView: View {
                     placeName = trigger.displayPlaceName
                     placeType = trigger.placeType
                     placeEnabled = trigger.isEnabled
+                } else if let schedule = model.workTriggers.first(where: { $0.placeType == .work })?.workScheduleSnapshot {
+                    weekdaysMask = schedule.weekdaysMask
+                    useNormalHours = schedule.isEnabled
+                    if let start = schedule.startMinute { normalStart = Self.date(for: start) }
+                    if let end = schedule.endMinute { normalEnd = Self.date(for: end) }
                 }
             }
             .toolbar {
                 ToolbarItem(placement: .cancellationAction) { Button("取消") { dismiss() } }
                 ToolbarItem(placement: .confirmationAction) {
                     Button("保存") {
-                        let saved: Bool
-                        if let trigger {
-                            saved = model.updateWorkplace(
-                                triggerId: trigger.id,
-                                latitude: coordinate.latitude,
-                                longitude: coordinate.longitude,
-                                radius: radius,
-                                placeName: placeName,
-                                placeType: placeType,
-                                isEnabled: placeEnabled
-                            )
-                        } else {
-                            saved = model.addWorkplace(
-                                latitude: coordinate.latitude,
-                                longitude: coordinate.longitude,
-                                radius: radius,
-                                placeName: placeName,
-                                placeType: placeType
-                            )
-                        }
-                        if saved { dismiss() }
+                        requestSave()
                     }
-                    .disabled(placeName.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+                    .disabled(placeName.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || !isScheduleValid)
                 }
                 if trigger != nil {
                     ToolbarItem(placement: .bottomBar) {
@@ -691,7 +703,80 @@ struct WorkplaceEditorView: View {
             } message: {
                 Text("将停止监测并删除“\(trigger?.displayPlaceName ?? "")”。")
             }
+            .confirmationDialog("排班变更应用到哪些记录？",
+                                isPresented: $showingScheduleScopeConfirmation,
+                                titleVisibility: .visible) {
+                Button("仅今后") { save(scope: .futureOnly) }
+                Button("全部历史") { save(scope: .allHistory) }
+                Button("取消", role: .cancel) {}
+            } message: {
+                Text("“仅今后”保留历史和当前进行中记录的原排班；“全部历史”会按新排班重新计算这个地点的记录。")
+            }
         }
+    }
+
+    private var isScheduleValid: Bool {
+        guard placeType == .work, useNormalHours else { return true }
+        return weekdaysMask & 0b1111111 != 0 && minuteOfDay(normalStart) != minuteOfDay(normalEnd)
+    }
+
+    private var editedSchedule: WorkScheduleSnapshot? {
+        guard placeType == .work else { return nil }
+        return WorkScheduleSnapshot(
+            weekdaysMask: weekdaysMask,
+            startMinute: useNormalHours ? minuteOfDay(normalStart) : nil,
+            endMinute: useNormalHours ? minuteOfDay(normalEnd) : nil,
+            timeZoneIdentifier: trigger?.timeZoneIdentifier ?? TimeZone.current.identifier,
+            isEnabled: useNormalHours
+        )
+    }
+
+    private func requestSave() {
+        guard isScheduleValid else { return }
+        if let trigger, placeType == .work, editedSchedule != trigger.workScheduleSnapshot {
+            showingScheduleScopeConfirmation = true
+        } else {
+            save(scope: .futureOnly)
+        }
+    }
+
+    private func save(scope: WorkScheduleEditScope) {
+        let schedule = editedSchedule
+        let saved: Bool
+        if let trigger {
+            saved = model.updateWorkplace(
+                triggerId: trigger.id,
+                latitude: coordinate.latitude,
+                longitude: coordinate.longitude,
+                radius: radius,
+                placeName: placeName,
+                placeType: placeType,
+                isEnabled: placeEnabled,
+                weekdaysMask: schedule?.weekdaysMask,
+                normalStartMinute: schedule?.startMinute,
+                normalEndMinute: schedule?.endMinute,
+                scheduleEditScope: scope
+            )
+        } else {
+            saved = model.addWorkplace(
+                latitude: coordinate.latitude,
+                longitude: coordinate.longitude,
+                radius: radius,
+                placeName: placeName,
+                placeType: placeType,
+                schedule: schedule
+            )
+        }
+        if saved { dismiss() }
+    }
+
+    private func minuteOfDay(_ date: Date) -> Int {
+        let parts = Calendar.current.dateComponents([.hour, .minute], from: date)
+        return (parts.hour ?? 0) * 60 + (parts.minute ?? 0)
+    }
+
+    private static func date(for minute: Int) -> Date {
+        Calendar.current.date(from: DateComponents(hour: minute / 60, minute: minute % 60)) ?? Date()
     }
 
     private func useCurrentLocationAsPlace() async {

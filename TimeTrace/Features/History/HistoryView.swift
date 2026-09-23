@@ -22,6 +22,8 @@ struct HistoryView: View {
         let allSummaries = completedSummaries
         let orphanedEvents = filteredOrphanedEvents
         let origins = originBySessionID
+        let overtime = overtimeBySessionID
+        let daySpans = crossedDaysBySessionID
         let visibleSummaries = Array(allSummaries.prefix(displayedHistoryCount))
         let leftSummaries = visibleSummaries.enumerated().compactMap { index, summary in
             index.isMultiple(of: 2) ? summary : nil
@@ -63,7 +65,10 @@ struct HistoryView: View {
                     VStack(spacing: 8) {
                         ForEach(pendingSessions, id: \.id) { session in
                             Button { selectedSummary = singleSessionSummary(session) } label: {
-                                HistoryStatusRow(session: session, state: .needsCompletion, origin: origins[session.id] ?? .system)
+                                HistoryStatusRow(session: session, state: .needsCompletion,
+                                                 origin: origins[session.id] ?? .system,
+                                                 crossedDays: daySpans[session.id] ?? 0,
+                                                 overtime: overtime[session.id])
                             }
                             .buttonStyle(.plain)
                             .accessibilityHint("补齐这段时间记录的结束时间")
@@ -94,7 +99,10 @@ struct HistoryView: View {
                     VStack(spacing: 8) {
                         ForEach(activeSessions, id: \.id) { session in
                             Button { selectedSummary = singleSessionSummary(session) } label: {
-                                HistoryStatusRow(session: session, state: .active, origin: origins[session.id] ?? .system)
+                                HistoryStatusRow(session: session, state: .active,
+                                                 origin: origins[session.id] ?? .system,
+                                                 crossedDays: daySpans[session.id] ?? 0,
+                                                 overtime: overtime[session.id])
                             }
                             .buttonStyle(.plain)
                             .accessibilityHint("查看这段正在记录的活动时间")
@@ -135,7 +143,8 @@ struct HistoryView: View {
         }
         .sheet(item: $repairingEvent) { RepairOrphanedExitView(event: $0) }
         .sheet(item: $selectedSummary) { summary in
-            HistoryDayDetailView(summary: summary, origins: origins, onSaved: { selectedSummary = nil })
+            HistoryDayDetailView(summary: summary, origins: origins, overtime: overtime,
+                                 crossedDays: daySpans, onSaved: { selectedSummary = nil })
         }
         .sheet(isPresented: $addingSession) { AddSessionView() }
     }
@@ -224,6 +233,16 @@ struct HistoryView: View {
         Dictionary(uniqueKeysWithValues: workSessions.map { ($0.id, origin(for: $0)) })
     }
 
+    private var overtimeBySessionID: [UUID: OvertimeBreakdown] {
+        Dictionary(uniqueKeysWithValues: workSessions.compactMap { session in
+            model.overtimeBreakdown(for: session).map { (session.id, $0) }
+        })
+    }
+
+    private var crossedDaysBySessionID: [UUID: Int] {
+        Dictionary(uniqueKeysWithValues: workSessions.map { ($0.id, model.crossedDayCount(for: $0)) })
+    }
+
     private func origin(for session: ActivitySession) -> HistoryRecordOrigin {
         let startEvent = model.events.first { $0.id == session.startEventId }
 
@@ -238,6 +257,7 @@ struct HistoryView: View {
 
         let wasAdjusted = model.events.contains { event in
             event.eventType == .sessionAdjusted &&
+            event.metadata.values["adjustmentKind"] != WorkScheduleSnapshot.adjustmentKind &&
             event.metadata.values["sessionId"] == session.id.uuidString
         }
         if wasAdjusted || session.status == .manuallyAdjusted {
@@ -282,7 +302,9 @@ struct HistoryView: View {
             HistoryDayCard(
                 summary: summary,
                 durationTier: durationTier(for: summary.totalDuration),
-                origins: originBySessionID
+                origins: originBySessionID,
+                overtime: overtimeBySessionID,
+                crossedDays: crossedDaysBySessionID
             )
             .contentShape(RoundedRectangle(cornerRadius: 22, style: .continuous))
         }
@@ -439,6 +461,8 @@ private struct HistoryStatusRow: View {
     let session: ActivitySession
     let state: HistorySessionState
     let origin: HistoryRecordOrigin
+    let crossedDays: Int
+    let overtime: OvertimeBreakdown?
 
     var body: some View {
         HStack(spacing: 12) {
@@ -458,6 +482,16 @@ private struct HistoryStatusRow: View {
                 Text("开始于 \(TimeTraceFormat.day.string(from: session.startAt)) \(TimeTraceFormat.time.string(from: session.startAt))")
                     .font(.caption)
                     .foregroundStyle(.secondary)
+                if crossedDays > 0 || (overtime?.totalOvertime ?? 0) > 0 {
+                    HStack(spacing: 8) {
+                        if crossedDays > 0 { Text("跨 \(crossedDays) 天") }
+                        if let overtime, overtime.totalOvertime > 0 {
+                            Text("加班 \(TimeTraceFormat.duration(overtime.totalOvertime))")
+                        }
+                    }
+                    .font(.caption2.weight(.medium))
+                    .foregroundStyle(state.tint)
+                }
             }
 
             Spacer(minLength: 8)
@@ -524,15 +558,17 @@ private struct HistoryDayCard: View {
     let summary: DailyActivitySummary
     let durationTier: HistoryDurationTier
     let origins: [UUID: HistoryRecordOrigin]
+    let overtime: [UUID: OvertimeBreakdown]
+    let crossedDays: [UUID: Int]
 
     private var tint: Color { durationTier.color }
 
-    private var hasOvernightSession: Bool {
-        let calendar = Calendar.current
-        return summary.sessions.contains { session in
-            guard let endAt = session.endAt else { return false }
-            return !calendar.isDate(session.startAt, inSameDayAs: endAt)
-        }
+    private var maximumCrossedDays: Int {
+        summary.sessions.map { crossedDays[$0.id] ?? 0 }.max() ?? 0
+    }
+
+    private var totalOvertime: TimeInterval {
+        summary.sessions.compactMap { overtime[$0.id]?.totalOvertime }.reduce(0, +)
     }
 
     var body: some View {
@@ -545,8 +581,8 @@ private struct HistoryDayCard: View {
 
                 Spacer(minLength: 0)
 
-                if hasOvernightSession {
-                    Text("跨天")
+                if maximumCrossedDays > 0 {
+                    Text("跨 \(maximumCrossedDays) 天")
                         .font(.caption2.weight(.semibold))
                         .foregroundStyle(design.violet)
                         .padding(.horizontal, 7)
@@ -566,6 +602,11 @@ private struct HistoryDayCard: View {
                 Text("\(summary.sessionCount) 个记录时段 · \(durationTier.label)")
                     .font(.caption)
                     .foregroundStyle(.secondary)
+                if totalOvertime > 0 {
+                    Text("加班 \(TimeTraceFormat.duration(totalOvertime))")
+                        .font(.caption.weight(.semibold))
+                        .foregroundStyle(design.violet)
+                }
             }
 
             VStack(spacing: 8) {
@@ -573,7 +614,9 @@ private struct HistoryDayCard: View {
                     HistorySessionItem(
                         session: session,
                         tint: tint,
-                        origin: origins[session.id] ?? .system
+                        origin: origins[session.id] ?? .system,
+                        overtime: overtime[session.id],
+                        crossedDays: crossedDays[session.id] ?? 0
                     )
                 }
             }
@@ -613,6 +656,8 @@ private struct HistoryDayDetailView: View {
     @Environment(\.dismiss) private var dismiss
     let summary: DailyActivitySummary
     let origins: [UUID: HistoryRecordOrigin]
+    let overtime: [UUID: OvertimeBreakdown]
+    let crossedDays: [UUID: Int]
     let onSaved: () -> Void
     @State private var editingSession: ActivitySession?
 
@@ -628,6 +673,19 @@ private struct HistoryDayDetailView: View {
                     LabeledContent("离开", value: summary.lastDepartureTime.map {
                         TimeTraceFormat.time.string(from: $0)
                     } ?? "未检测到")
+                    if hasCompleteBreakdown {
+                        LabeledContent("正常工时", value: TimeTraceFormat.duration(totalNormalDuration))
+                        LabeledContent("加班总计", value: TimeTraceFormat.duration(totalOvertime))
+                        if totalEarlyOvertime > 0 {
+                            LabeledContent("早到加班", value: TimeTraceFormat.duration(totalEarlyOvertime))
+                        }
+                        if totalLateOvertime > 0 {
+                            LabeledContent("晚走加班", value: TimeTraceFormat.duration(totalLateOvertime))
+                        }
+                        if totalRestDayOvertime > 0 {
+                            LabeledContent("休息日加班", value: TimeTraceFormat.duration(totalRestDayOvertime))
+                        }
+                    }
                 }
 
                 Section("时段详情") {
@@ -636,7 +694,9 @@ private struct HistoryDayDetailView: View {
                             HStack(spacing: 10) {
                                 HistoryDetailSessionRow(
                                     session: session,
-                                    origin: origins[session.id] ?? .system
+                                    origin: origins[session.id] ?? .system,
+                                    overtime: overtime[session.id],
+                                    crossedDays: crossedDays[session.id] ?? 0
                                 )
                                 if session.endAt == nil && session.status != .active {
                                     Text("补齐")
@@ -668,11 +728,41 @@ private struct HistoryDayDetailView: View {
             }
         }
     }
+
+    private var sessionBreakdowns: [OvertimeBreakdown] {
+        summary.sessions.compactMap { overtime[$0.id] }
+    }
+
+    private var hasCompleteBreakdown: Bool {
+        !summary.sessions.isEmpty && sessionBreakdowns.count == summary.sessions.count
+    }
+
+    private var totalNormalDuration: TimeInterval {
+        sessionBreakdowns.map(\.normalDuration).reduce(0, +)
+    }
+
+    private var totalOvertime: TimeInterval {
+        sessionBreakdowns.map(\.totalOvertime).reduce(0, +)
+    }
+
+    private var totalEarlyOvertime: TimeInterval {
+        sessionBreakdowns.map(\.earlyOvertime).reduce(0, +)
+    }
+
+    private var totalLateOvertime: TimeInterval {
+        sessionBreakdowns.map(\.lateOvertime).reduce(0, +)
+    }
+
+    private var totalRestDayOvertime: TimeInterval {
+        sessionBreakdowns.map(\.restDayOvertime).reduce(0, +)
+    }
 }
 
 private struct HistoryDetailSessionRow: View {
     let session: ActivitySession
     let origin: HistoryRecordOrigin
+    let overtime: OvertimeBreakdown?
+    let crossedDays: Int
 
     var body: some View {
         HStack(spacing: 8) {
@@ -691,6 +781,27 @@ private struct HistoryDetailSessionRow: View {
                         .font(.subheadline.monospacedDigit())
                 }
                 HistoryOriginBadge(origin: origin)
+                if crossedDays > 0 {
+                    Text("跨 \(crossedDays) 天")
+                        .font(.caption2.weight(.semibold))
+                        .foregroundStyle(.secondary)
+                }
+                if let overtime {
+                    VStack(alignment: .leading, spacing: 2) {
+                        Text("正常 \(TimeTraceFormat.duration(overtime.normalDuration)) · 加班 \(TimeTraceFormat.duration(overtime.totalOvertime))")
+                        if overtime.earlyOvertime > 0 {
+                            Text("早到 \(TimeTraceFormat.duration(overtime.earlyOvertime))")
+                        }
+                        if overtime.lateOvertime > 0 {
+                            Text("晚走 \(TimeTraceFormat.duration(overtime.lateOvertime))")
+                        }
+                        if overtime.restDayOvertime > 0 {
+                            Text("休息日 \(TimeTraceFormat.duration(overtime.restDayOvertime))")
+                        }
+                    }
+                    .font(.caption2)
+                    .foregroundStyle(.secondary)
+                }
             }
 
             Spacer(minLength: 8)
@@ -713,6 +824,8 @@ private struct HistorySessionItem: View {
     let session: ActivitySession
     let tint: Color
     let origin: HistoryRecordOrigin
+    let overtime: OvertimeBreakdown?
+    let crossedDays: Int
 
     var body: some View {
         VStack(alignment: .leading, spacing: 5) {
@@ -731,6 +844,16 @@ private struct HistorySessionItem: View {
                     .font(.caption)
                     .foregroundStyle(.secondary)
                 HistoryOriginBadge(origin: origin)
+            }
+            if crossedDays > 0 || (overtime?.totalOvertime ?? 0) > 0 {
+                HStack(spacing: 8) {
+                    if crossedDays > 0 { Text("跨 \(crossedDays) 天") }
+                    if let overtime, overtime.totalOvertime > 0 {
+                        Text("加班 \(TimeTraceFormat.duration(overtime.totalOvertime))")
+                    }
+                }
+                .font(.caption2.weight(.semibold))
+                .foregroundStyle(tint)
             }
         }
         .frame(maxWidth: .infinity, alignment: .leading)

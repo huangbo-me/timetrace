@@ -1,5 +1,134 @@
 import Foundation
 
+struct OvertimeBreakdown: Equatable {
+    let normalDuration: TimeInterval
+    let earlyOvertime: TimeInterval
+    let lateOvertime: TimeInterval
+    let restDayOvertime: TimeInterval
+
+    var totalOvertime: TimeInterval {
+        earlyOvertime + lateOvertime + restDayOvertime
+    }
+}
+
+enum SessionDaySpan {
+    static func crossedDayCount(from start: Date, to end: Date,
+                                timeZoneIdentifier: String) -> Int {
+        guard end > start else { return 0 }
+        var calendar = Calendar(identifier: .gregorian)
+        calendar.timeZone = TimeZone(identifier: timeZoneIdentifier) ?? .current
+        let startDay = calendar.startOfDay(for: start)
+        let endDay = calendar.startOfDay(for: end)
+        return max(0, calendar.dateComponents([.day], from: startDay, to: endDay).day ?? 0)
+    }
+}
+
+enum WorkScheduleCalculator {
+    static func breakdown(from start: Date, to end: Date,
+                          schedule: WorkScheduleSnapshot) -> OvertimeBreakdown? {
+        guard schedule.isEnabled,
+              let startMinute = schedule.startMinute,
+              let endMinute = schedule.endMinute,
+              let timeZone = TimeZone(identifier: schedule.timeZoneIdentifier),
+              end > start else { return nil }
+
+        var calendar = Calendar(identifier: .gregorian)
+        calendar.timeZone = timeZone
+        let session = DateInterval(start: start, end: end)
+        let firstDay = calendar.date(byAdding: .day, value: -1,
+                                     to: calendar.startOfDay(for: start))!
+        let lastDay = calendar.startOfDay(for: end)
+        let finalGeneratedDay = calendar.date(byAdding: .day, value: 1, to: lastDay)!
+
+        var shifts: [DateInterval] = []
+        var allShifts: [DateInterval] = []
+        var boundaries: Set<Date> = [start, end]
+        var day = firstDay
+        while day <= finalGeneratedDay {
+            let nextDay = calendar.date(byAdding: .day, value: 1, to: day)!
+            boundaries.insert(day)
+            boundaries.insert(nextDay)
+            let weekday = calendar.component(.weekday, from: day)
+            if schedule.weekdaysMask.containsWeekday(weekday) {
+                let endBase = endMinute > startMinute ? day : nextDay
+                guard let shiftStart = wallClockDate(on: day, minuteOfDay: startMinute,
+                                                     calendar: calendar),
+                      let shiftEnd = wallClockDate(on: endBase, minuteOfDay: endMinute,
+                                                   calendar: calendar) else { return nil }
+                let shift = DateInterval(start: shiftStart, end: shiftEnd)
+                allShifts.append(shift)
+                if shift.intersects(session) {
+                    shifts.append(shift)
+                    boundaries.insert(max(start, shiftStart))
+                    boundaries.insert(min(end, shiftEnd))
+                }
+            }
+            day = nextDay
+        }
+        shifts.sort { $0.start < $1.start }
+
+        var normal: TimeInterval = 0
+        var early: TimeInterval = 0
+        var late: TimeInterval = 0
+        var restDay: TimeInterval = 0
+        let points = boundaries.filter { $0 >= start && $0 <= end }.sorted()
+        guard points.count >= 2 else { return nil }
+
+        for index in 0..<(points.count - 1) {
+            let segmentStart = points[index]
+            let segmentEnd = points[index + 1]
+            guard segmentEnd > segmentStart else { continue }
+            let duration = segmentEnd.timeIntervalSince(segmentStart)
+            let midpoint = segmentStart.addingTimeInterval(duration / 2)
+            if shifts.contains(where: { $0.contains(midpoint) }) {
+                normal += duration
+                continue
+            }
+
+            let localDay = calendar.startOfDay(for: midpoint)
+            let weekday = calendar.component(.weekday, from: localDay)
+            guard schedule.weekdaysMask.containsWeekday(weekday) else {
+                restDay += duration
+                continue
+            }
+
+            let alreadyWorkedNormal = shifts.contains { shift in
+                shift.end > start && shift.end <= segmentStart
+            }
+            if alreadyWorkedNormal {
+                late += duration
+                continue
+            }
+            let previousEnd = allShifts.filter { $0.end <= midpoint }.map(\.end).max()
+            let nextStart = allShifts.filter { $0.start >= midpoint }.map(\.start).min()
+            switch (previousEnd, nextStart) {
+            case let (previous?, next?) where next.timeIntervalSince(midpoint) < midpoint.timeIntervalSince(previous):
+                early += duration
+            case (nil, .some):
+                early += duration
+            default:
+                late += duration
+            }
+        }
+
+        return OvertimeBreakdown(
+            normalDuration: normal,
+            earlyOvertime: early,
+            lateOvertime: late,
+            restDayOvertime: restDay
+        )
+    }
+
+    private static func wallClockDate(on day: Date, minuteOfDay: Int,
+                                      calendar: Calendar) -> Date? {
+        var components = calendar.dateComponents([.year, .month, .day], from: day)
+        components.hour = minuteOfDay / 60
+        components.minute = minuteOfDay % 60
+        components.second = 0
+        return calendar.date(from: components)
+    }
+}
+
 struct DailyActivitySummary: Identifiable {
     var id: Date { date }
     let date: Date

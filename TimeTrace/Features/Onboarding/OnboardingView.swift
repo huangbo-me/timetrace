@@ -145,7 +145,13 @@ struct OnboardingView: View {
                 } header: {
                     Text("常规安排")
                 } footer: {
-                    Text("目前仅保存此安排，不用于工作日判断、自动结束或工时扣除；休息日也会记录地点进出。")
+                    VStack(alignment: .leading, spacing: 4) {
+                        Text("用于计算正常工时和加班；休息日也会持续记录地点进出。结束时间早于开始时间时，视为次日下班。")
+                        if useNormalHours && minuteOfDay(normalStart) == minuteOfDay(normalEnd) {
+                            Text("上班时间和下班时间不能相同。")
+                                .foregroundStyle(.red)
+                        }
+                    }
                 }
 
                 Section {
@@ -161,6 +167,9 @@ struct OnboardingView: View {
                         )
                     }
                     .frame(maxWidth: .infinity)
+                    .disabled(placeName.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ||
+                              (useNormalHours && (weekdaysMask & 0b1111111 == 0 ||
+                               minuteOfDay(normalStart) == minuteOfDay(normalEnd))))
                 } footer: {
                     Text("系统会先请求使用期间定位；完成后会继续请求“始终允许”和通知权限，用于后台围栏记录与进出通知。")
                 }

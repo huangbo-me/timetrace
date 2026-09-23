@@ -16,6 +16,9 @@ final class UnavailableActivityRepository: ActivityRepository {
     func save(_ activity: ActivityDefinition) throws { throw PersistenceUnavailableError.unavailable }
     func fetchTriggers(activityId: UUID?) throws -> [ActivityTrigger] { [] }
     func save(_ trigger: ActivityTrigger) throws { throw PersistenceUnavailableError.unavailable }
+    func save(_ trigger: ActivityTrigger, appending events: [ActivityEvent]) throws {
+        throw PersistenceUnavailableError.unavailable
+    }
     func delete(_ trigger: ActivityTrigger) throws { throw PersistenceUnavailableError.unavailable }
 }
 

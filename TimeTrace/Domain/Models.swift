@@ -104,6 +104,105 @@ struct EventMetadata: Codable, Equatable {
     static let empty = EventMetadata()
 }
 
+enum WorkScheduleEditScope: String, Codable {
+    case futureOnly
+    case allHistory
+}
+
+struct WorkScheduleSnapshot: Codable, Equatable {
+    static let adjustmentKind = "workSchedule"
+
+    let weekdaysMask: Int
+    let startMinute: Int?
+    let endMinute: Int?
+    let timeZoneIdentifier: String
+    let isEnabled: Bool
+
+    init?(weekdaysMask: Int, startMinute: Int?, endMinute: Int?,
+          timeZoneIdentifier: String, isEnabled: Bool) {
+        let boundedMask = weekdaysMask & 0b1111111
+        guard let timeZone = TimeZone(identifier: timeZoneIdentifier) else { return nil }
+        if isEnabled {
+            guard boundedMask != 0,
+                  let startMinute, let endMinute,
+                  (0..<1_440).contains(startMinute),
+                  (0..<1_440).contains(endMinute),
+                  startMinute != endMinute else { return nil }
+        }
+        self.weekdaysMask = boundedMask
+        self.startMinute = startMinute
+        self.endMinute = endMinute
+        self.timeZoneIdentifier = timeZone.identifier
+        self.isEnabled = isEnabled
+    }
+
+    init?(metadata: EventMetadata) {
+        let values = metadata.values
+        guard let enabledRaw = values["workScheduleEnabled"],
+              let enabled = Bool(enabledRaw),
+              let maskRaw = values["workScheduleWeekdaysMask"],
+              let mask = Int(maskRaw),
+              let timeZoneIdentifier = values["workScheduleTimeZoneIdentifier"] else { return nil }
+        let start = values["workScheduleStartMinute"].flatMap(Int.init)
+        let end = values["workScheduleEndMinute"].flatMap(Int.init)
+        self.init(weekdaysMask: mask, startMinute: start, endMinute: end,
+                  timeZoneIdentifier: timeZoneIdentifier, isEnabled: enabled)
+    }
+
+    func adding(to metadata: EventMetadata) -> EventMetadata {
+        var result = metadata
+        result.values["workScheduleEnabled"] = String(isEnabled)
+        result.values["workScheduleWeekdaysMask"] = String(weekdaysMask)
+        result.values["workScheduleTimeZoneIdentifier"] = timeZoneIdentifier
+        result.values["workScheduleStartMinute"] = startMinute.map(String.init)
+        result.values["workScheduleEndMinute"] = endMinute.map(String.init)
+        return result
+    }
+}
+
+extension ActivityTrigger {
+    var workScheduleSnapshot: WorkScheduleSnapshot? {
+        WorkScheduleSnapshot(
+            weekdaysMask: weekdaysMask,
+            startMinute: normalStartMinute,
+            endMinute: normalEndMinute,
+            timeZoneIdentifier: timeZoneIdentifier,
+            isEnabled: normalStartMinute != nil || normalEndMinute != nil
+        )
+    }
+}
+
+enum WorkScheduleResolver {
+    static func snapshot(for session: ActivitySession, events: [ActivityEvent],
+                         currentPlace: ActivityTrigger?) -> WorkScheduleSnapshot? {
+        guard session.placeTriggerId != nil else { return nil }
+        let revisions = events.filter { event in
+            event.eventType == .sessionAdjusted &&
+            event.metadata.values["adjustmentKind"] == WorkScheduleSnapshot.adjustmentKind &&
+            (event.metadata.values["sessionId"] == session.id.uuidString ||
+             event.metadata.values["startEventId"] == session.startEventId?.uuidString)
+        }
+        if let latestRevision = revisions.sorted(by: revisionOrder).last {
+            return WorkScheduleSnapshot(metadata: latestRevision.metadata)
+        }
+        if let startEventId = session.startEventId,
+           let startEvent = events.first(where: { $0.id == startEventId }),
+           let snapshot = WorkScheduleSnapshot(metadata: startEvent.metadata) {
+            return snapshot
+        }
+        guard let currentPlace,
+              currentPlace.id == session.placeTriggerId,
+              currentPlace.placeType == .work else { return nil }
+        return currentPlace.workScheduleSnapshot
+    }
+
+    private static func revisionOrder(_ lhs: ActivityEvent, _ rhs: ActivityEvent) -> Bool {
+        if lhs.timestamp != rhs.timestamp { return lhs.timestamp < rhs.timestamp }
+        if lhs.createdAt != rhs.createdAt { return lhs.createdAt < rhs.createdAt }
+        return lhs.id.uuidString < rhs.id.uuidString
+    }
+}
+
 @Model
 final class ActivityDefinition {
     var id: UUID = UUID()

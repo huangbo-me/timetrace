@@ -295,6 +295,16 @@ final class AppModel: ObservableObject {
     func finishOnboarding(latitude: Double, longitude: Double, radius: Double,
                           weekdaysMask: Int, normalStartMinute: Int?, normalEndMinute: Int?,
                           placeName: String = "工作地点") {
+        guard let schedule = WorkScheduleSnapshot(
+            weekdaysMask: weekdaysMask,
+            startMinute: normalStartMinute,
+            endMinute: normalEndMinute,
+            timeZoneIdentifier: TimeZone.current.identifier,
+            isEnabled: normalStartMinute != nil || normalEndMinute != nil
+        ) else {
+            lastError = "上班时间和下班时间不能相同。"
+            return
+        }
         do {
             let work = workActivity ?? ActivityDefinition(name: "工作", type: .work)
             try activityRepository.save(work)
@@ -306,10 +316,10 @@ final class AppModel: ObservableObject {
                 radius: radius,
                 placeName: normalizedPlaceName(placeName),
                 regionIdentifier: nil,
-                weekdaysMask: weekdaysMask,
-                normalStartMinute: normalStartMinute,
-                normalEndMinute: normalEndMinute,
-                timeZoneIdentifier: TimeZone.current.identifier
+                weekdaysMask: schedule.weekdaysMask,
+                normalStartMinute: schedule.startMinute,
+                normalEndMinute: schedule.endMinute,
+                timeZoneIdentifier: schedule.timeZoneIdentifier
             )
             trigger.regionIdentifier = "timetrace.place.\(trigger.id.uuidString)"
             try activityRepository.save(trigger)
@@ -326,13 +336,13 @@ final class AppModel: ObservableObject {
 
     @discardableResult
     func addWorkplace(latitude: Double, longitude: Double, radius: Double, placeName: String,
-                      placeType: PlaceType = .work) -> Bool {
+                      placeType: PlaceType = .work, schedule: WorkScheduleSnapshot? = nil) -> Bool {
         guard let workActivity else {
             lastError = "请先完成地点配置。"
             return false
         }
         return addPlace(activityId: workActivity.id, latitude: latitude, longitude: longitude, radius: radius,
-                 placeName: placeName, placeType: placeType)
+                 placeName: placeName, placeType: placeType, schedule: schedule)
     }
 
     /// Adds a geofence for any activity.  The existing workplace UI is a
@@ -340,13 +350,21 @@ final class AppModel: ObservableObject {
     /// persistence or runtime boundary of a place.
     @discardableResult
     func addPlace(activityId: UUID, latitude: Double, longitude: Double, radius: Double, placeName: String,
-                  placeType: PlaceType = .other) -> Bool {
+                  placeType: PlaceType = .other, schedule: WorkScheduleSnapshot? = nil) -> Bool {
         guard activities.contains(where: { $0.id == activityId }) else {
             lastError = "活动已不存在，请刷新后重试。"
             return false
         }
         do {
-            let referenceTrigger = triggers.first { $0.activityId == activityId && $0.type == .geofence }
+            let referenceTrigger = triggers.first {
+                $0.activityId == activityId && $0.type == .geofence && $0.placeType == .work
+            }
+            let selectedSchedule: WorkScheduleSnapshot? = schedule ?? (placeType == .work
+                ? referenceTrigger?.workScheduleSnapshot ?? WorkScheduleSnapshot(
+                    weekdaysMask: 0b0111110, startMinute: 9 * 60, endMinute: 18 * 60,
+                    timeZoneIdentifier: TimeZone.current.identifier, isEnabled: true
+                )
+                : nil)
             let trigger = ActivityTrigger(
                 activityId: activityId,
                 type: .geofence,
@@ -356,10 +374,10 @@ final class AppModel: ObservableObject {
                 placeName: normalizedPlaceName(placeName),
                 placeType: placeType,
                 regionIdentifier: nil,
-                weekdaysMask: referenceTrigger?.weekdaysMask ?? 0,
-                normalStartMinute: referenceTrigger?.normalStartMinute,
-                normalEndMinute: referenceTrigger?.normalEndMinute,
-                timeZoneIdentifier: TimeZone.current.identifier
+                weekdaysMask: selectedSchedule?.weekdaysMask ?? 0,
+                normalStartMinute: selectedSchedule?.startMinute,
+                normalEndMinute: selectedSchedule?.endMinute,
+                timeZoneIdentifier: selectedSchedule?.timeZoneIdentifier ?? TimeZone.current.identifier
             )
             trigger.regionIdentifier = "timetrace.place.\(trigger.id.uuidString)"
             try activityRepository.save(trigger)
@@ -374,27 +392,75 @@ final class AppModel: ObservableObject {
 
     @discardableResult
     func updateWorkplace(triggerId: UUID, latitude: Double, longitude: Double, radius: Double,
-                         placeName: String, placeType: PlaceType = .work, isEnabled: Bool? = nil) -> Bool {
+                         placeName: String, placeType: PlaceType = .work, isEnabled: Bool? = nil,
+                         weekdaysMask: Int? = nil, normalStartMinute: Int? = nil,
+                         normalEndMinute: Int? = nil,
+                         scheduleEditScope: WorkScheduleEditScope = .futureOnly) -> Bool {
         return updatePlace(triggerId: triggerId, latitude: latitude, longitude: longitude, radius: radius,
-                    placeName: placeName, placeType: placeType, isEnabled: isEnabled)
+                    placeName: placeName, placeType: placeType, isEnabled: isEnabled,
+                    weekdaysMask: weekdaysMask, normalStartMinute: normalStartMinute,
+                    normalEndMinute: normalEndMinute, scheduleEditScope: scheduleEditScope)
     }
 
     @discardableResult
     func updatePlace(triggerId: UUID, latitude: Double, longitude: Double, radius: Double,
-                     placeName: String, placeType: PlaceType, isEnabled: Bool? = nil) -> Bool {
+                     placeName: String, placeType: PlaceType, isEnabled: Bool? = nil,
+                     weekdaysMask: Int? = nil, normalStartMinute: Int? = nil,
+                     normalEndMinute: Int? = nil,
+                     scheduleEditScope: WorkScheduleEditScope = .futureOnly) -> Bool {
         guard let trigger = triggers.first(where: { $0.id == triggerId && $0.type == .geofence }) else {
             lastError = "地点已不存在，请刷新后重试。"
             return false
         }
+        let revisedSchedule: WorkScheduleSnapshot?
+        if let weekdaysMask {
+            revisedSchedule = WorkScheduleSnapshot(
+                weekdaysMask: weekdaysMask,
+                startMinute: normalStartMinute,
+                endMinute: normalEndMinute,
+                timeZoneIdentifier: trigger.timeZoneIdentifier,
+                isEnabled: normalStartMinute != nil || normalEndMinute != nil
+            )
+            guard revisedSchedule != nil else {
+                lastError = "上班时间和下班时间不能相同。"
+                return false
+            }
+        } else {
+            revisedSchedule = nil
+        }
         do {
+            let oldSchedule = trigger.workScheduleSnapshot
+            let scheduleChanged = revisedSchedule.map { $0 != oldSchedule } ?? false
+            let scheduleEvents = scheduleChanged
+                ? workScheduleAdjustmentEvents(
+                    for: trigger,
+                    snapshot: scheduleEditScope == .allHistory ? revisedSchedule! : oldSchedule,
+                    onlyMissingSnapshots: scheduleEditScope == .futureOnly
+                )
+                : []
             trigger.latitude = latitude
             trigger.longitude = longitude
             trigger.radius = radius
             trigger.placeName = normalizedPlaceName(placeName)
             trigger.placeType = placeType
             if let isEnabled { trigger.isEnabled = isEnabled }
-            trigger.timeZoneIdentifier = TimeZone.current.identifier
-            try activityRepository.save(trigger)
+            if let revisedSchedule {
+                trigger.weekdaysMask = revisedSchedule.weekdaysMask
+                trigger.normalStartMinute = revisedSchedule.startMinute
+                trigger.normalEndMinute = revisedSchedule.endMinute
+                trigger.timeZoneIdentifier = revisedSchedule.timeZoneIdentifier
+            }
+            try activityRepository.save(trigger, appending: scheduleEvents)
+            if !scheduleEvents.isEmpty {
+                do {
+                    try pipeline.refreshStaleSessions(
+                        activityId: trigger.activityId,
+                        timeZoneIdentifier: trigger.timeZoneIdentifier
+                    )
+                } catch {
+                    lastError = "排班已保存，历史统计将在下次刷新时同步。"
+                }
+            }
             reconcileGeofence(trigger, fallbackMessage: "地点已更新；定位恢复后会自动开启记录。")
             refreshPublishedData()
             return true
@@ -402,6 +468,47 @@ final class AppModel: ObservableObject {
             lastError = TimeTraceLocalization.errorMessage(error, fallback: "更新地点失败，请稍后重试。")
             return false
         }
+    }
+
+    private func workScheduleAdjustmentEvents(for trigger: ActivityTrigger,
+                                               snapshot: WorkScheduleSnapshot?,
+                                               onlyMissingSnapshots: Bool) -> [ActivityEvent] {
+        guard let snapshot else { return [] }
+        return sessions.filter { session in
+            guard session.deletedAt == nil, session.placeTriggerId == trigger.id else { return false }
+            return !onlyMissingSnapshots || !hasStoredScheduleSnapshot(for: session)
+        }.map { session in
+            var metadata = EventMetadata(values: [
+                "adjustmentKind": WorkScheduleSnapshot.adjustmentKind,
+                "sessionId": session.id.uuidString,
+                "startEventId": session.startEventId?.uuidString ?? "",
+                "oldStart": session.startAt.ISO8601Format(.init(includingFractionalSeconds: true)),
+                "newStart": session.startAt.ISO8601Format(.init(includingFractionalSeconds: true)),
+                "oldEnd": session.endAt?.ISO8601Format(.init(includingFractionalSeconds: true)) ?? "",
+                "newEnd": session.endAt?.ISO8601Format(.init(includingFractionalSeconds: true)) ?? ""
+            ])
+            metadata = snapshot.adding(to: metadata)
+            return ActivityEvent(
+                activityId: session.activityId,
+                eventType: .sessionAdjusted,
+                timestamp: Date(),
+                source: .user,
+                metadata: metadata
+            )
+        }
+    }
+
+    private func hasStoredScheduleSnapshot(for session: ActivitySession) -> Bool {
+        if events.contains(where: { event in
+            event.eventType == .sessionAdjusted &&
+            event.metadata.values["adjustmentKind"] == WorkScheduleSnapshot.adjustmentKind &&
+            (event.metadata.values["sessionId"] == session.id.uuidString ||
+             event.metadata.values["startEventId"] == session.startEventId?.uuidString) &&
+            WorkScheduleSnapshot(metadata: event.metadata) != nil
+        }) { return true }
+        guard let startEventId = session.startEventId,
+              let startEvent = events.first(where: { $0.id == startEventId }) else { return false }
+        return WorkScheduleSnapshot(metadata: startEvent.metadata) != nil
     }
 
     @discardableResult
@@ -980,6 +1087,31 @@ final class AppModel: ObservableObject {
         return analytics.placeSummaries(sessions: workSessions, activityId: nil, interval: interval)
     }
 
+    func overtimeBreakdown(for session: ActivitySession, now: Date = Date()) -> OvertimeBreakdown? {
+        guard session.deletedAt == nil,
+              let end = session.endAt ?? (session.status == .active ? now : nil),
+              end > session.startAt,
+              let startEvent = events.first(where: { $0.id == session.startEventId }),
+              startEvent.eventType == .geofenceEnter else { return nil }
+        let place = triggers.first { $0.id == session.placeTriggerId }
+        let recordedType = startEvent.metadata.values["placeType"].flatMap(PlaceType.init(rawValue:))
+            ?? place?.placeType
+        guard recordedType == .work,
+              let schedule = WorkScheduleResolver.snapshot(
+                for: session, events: events, currentPlace: place
+              ) else { return nil }
+        return WorkScheduleCalculator.breakdown(from: session.startAt, to: end, schedule: schedule)
+    }
+
+    func crossedDayCount(for session: ActivitySession, now: Date = Date()) -> Int {
+        guard let end = session.endAt ?? (session.status == .active ? now : nil) else { return 0 }
+        return SessionDaySpan.crossedDayCount(
+            from: session.startAt,
+            to: end,
+            timeZoneIdentifier: session.timeZoneIdentifier
+        )
+    }
+
     func session(for instance: ReminderInstance) -> ActivitySession? {
         if let direct = sessions.first(where: { $0.id == instance.sessionId }) { return direct }
         // A late cloud projection may have replaced a duplicate session ID.
@@ -1102,6 +1234,10 @@ final class AppModel: ObservableObject {
             var metadata = timeZoneMetadata()
             metadata.values["placeTriggerId"] = trigger.id.uuidString
             metadata.values["placeType"] = trigger.placeType.rawValue
+            if type == .geofenceEnter, trigger.placeType == .work,
+               let snapshot = trigger.workScheduleSnapshot {
+                metadata = snapshot.adding(to: metadata)
+            }
             if monitoringBeganInside {
                 metadata.values["monitoringBeganInside"] = "true"
             }

@@ -7,6 +7,7 @@ protocol ActivityRepository {
     func save(_ activity: ActivityDefinition) throws
     func fetchTriggers(activityId: UUID?) throws -> [ActivityTrigger]
     func save(_ trigger: ActivityTrigger) throws
+    func save(_ trigger: ActivityTrigger, appending events: [ActivityEvent]) throws
     func delete(_ trigger: ActivityTrigger) throws
 }
 
