@@ -8,6 +8,79 @@ final class AnalyticsServiceTests: XCTestCase {
     private let activityId = UUID()
     private var calendar = utcCalendar()
 
+    func testHistoryMasonryPlacesEachCardOnLighterColumnInInputOrder() {
+        let weights = [1, 4, 2, 4, 1, 3]
+        let result = HistoryMasonryColumns.distribute(Array(weights.enumerated())) { $0.element }
+
+        XCTAssertEqual(result.left.map(\.offset), [0, 2, 3])
+        XCTAssertEqual(result.right.map(\.offset), [1, 4, 5])
+        XCTAssertEqual(result.leftWeight, 7)
+        XCTAssertEqual(result.rightWeight, 8)
+        XCTAssertLessThanOrEqual(abs(result.leftWeight - result.rightWeight), weights.max()!)
+        XCTAssertNotEqual(result.left.map(\.offset), [0, 2, 4])
+        let repeated = HistoryMasonryColumns.distribute(Array(weights.enumerated())) { $0.element }
+        XCTAssertEqual(repeated.left.map(\.offset), result.left.map(\.offset))
+        XCTAssertEqual(repeated.right.map(\.offset), result.right.map(\.offset))
+    }
+
+    func testHistoryMasonryEmptyInputHasEmptyColumnsAndZeroWeights() {
+        let result = HistoryMasonryColumns<Int>.distribute([]) { $0 }
+        XCTAssertTrue(result.left.isEmpty)
+        XCTAssertTrue(result.right.isEmpty)
+        XCTAssertEqual(result.leftWeight, 0)
+        XCTAssertEqual(result.rightWeight, 0)
+    }
+
+    func testHistoryMasonryClampsNonpositiveWeightsAndBreaksTiesToLeft() {
+        let result = HistoryMasonryColumns.distribute([0, -4, 0, -1]) { $0 }
+        XCTAssertEqual(result.left, [0, 0])
+        XCTAssertEqual(result.right, [-4, -1])
+        XCTAssertEqual(result.leftWeight, 2)
+        XCTAssertEqual(result.rightWeight, 2)
+    }
+
+    func testHistoryOvertimePresentationIncludesFlexibleWorkdayInMixedAggregate() {
+        let result = HistoryOvertimePresentation([
+            OvertimeBreakdown(normalDuration: 8 * 3600, earlyOvertime: 0,
+                              lateOvertime: 0, workdayOvertime: 2 * 3600, restDayOvertime: 0),
+            OvertimeBreakdown(normalDuration: 7 * 3600, earlyOvertime: 1800,
+                              lateOvertime: 3600, workdayOvertime: 0, restDayOvertime: 3 * 3600)
+        ])
+        XCTAssertEqual(result.normalDuration, 15 * 3600)
+        XCTAssertEqual(result.totalOvertime, 6.5 * 3600)
+        XCTAssertEqual(result.workdayOvertimeText, "工作日加班 \(TimeTraceFormat.duration(2 * 3600))")
+        XCTAssertEqual(result.earlyOvertime, 1800)
+        XCTAssertEqual(result.lateOvertime, 3600)
+        XCTAssertEqual(result.restDayOvertime, 3 * 3600)
+    }
+
+    func testHistoryOvertimePresentationOmitsZeroWorkdayOvertime() {
+        let fixed = OvertimeBreakdown(normalDuration: 3600, earlyOvertime: 0,
+                                      lateOvertime: 1800, workdayOvertime: 0, restDayOvertime: 0)
+        XCTAssertNil(HistoryOvertimePresentation([fixed]).workdayOvertimeText)
+        XCTAssertNil(HistoryOvertimePresentation([]).workdayOvertimeText)
+    }
+
+    func testHistoryOriginIgnoresScheduleAdjustmentsButKeepsRecordCorrections() {
+        let start = ActivityEvent(activityId: activityId, eventType: .geofenceEnter,
+                                  timestamp: date(day: 1, hour: 9), source: .coreLocation)
+        let value = ActivitySession(activityId: activityId, startAt: start.timestamp,
+                                    endAt: date(day: 1, hour: 18), startEventId: start.id)
+        let scheduleAdjustment = ActivityEvent(
+            activityId: activityId, eventType: .sessionAdjusted, timestamp: date(day: 2, hour: 10),
+            source: .user, metadata: EventMetadata(values: [
+                "sessionId": value.id.uuidString,
+                "adjustmentKind": WorkScheduleSnapshot.adjustmentKind
+            ])
+        )
+        XCTAssertEqual(HistoryRecordOrigin.map(sessions: [value], events: [start, scheduleAdjustment])[value.id], .system)
+        let recordAdjustment = ActivityEvent(
+            activityId: activityId, eventType: .sessionAdjusted, timestamp: date(day: 2, hour: 11),
+            source: .user, metadata: EventMetadata(values: ["sessionId": value.id.uuidString])
+        )
+        XCTAssertEqual(HistoryRecordOrigin.map(sessions: [value], events: [start, scheduleAdjustment, recordAdjustment])[value.id], .backfilled)
+    }
+
     func testStatutorySchedulesAcceptEmptyWeekdaysWhileCustomSchedulesRequireSelection() throws {
         for mode in WorkScheduleMode.allCases {
             let statutory = WorkScheduleSnapshot(

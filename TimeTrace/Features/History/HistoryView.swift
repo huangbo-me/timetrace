@@ -1,5 +1,53 @@
 import SwiftUI
 
+struct HistoryMasonryColumns<Element> {
+    let left: [Element]
+    let right: [Element]
+    let leftWeight: Int
+    let rightWeight: Int
+
+    static func distribute(_ elements: [Element], weight: (Element) -> Int) -> Self {
+        var left: [Element] = []
+        var right: [Element] = []
+        var leftWeight = 0
+        var rightWeight = 0
+        for element in elements {
+            let value = max(1, weight(element))
+            if leftWeight <= rightWeight {
+                left.append(element)
+                leftWeight += value
+            } else {
+                right.append(element)
+                rightWeight += value
+            }
+        }
+        return Self(left: left, right: right, leftWeight: leftWeight, rightWeight: rightWeight)
+    }
+}
+
+struct HistoryOvertimePresentation {
+    let normalDuration: TimeInterval
+    let totalOvertime: TimeInterval
+    let earlyOvertime: TimeInterval
+    let lateOvertime: TimeInterval
+    let workdayOvertime: TimeInterval
+    let restDayOvertime: TimeInterval
+
+    init(_ breakdowns: [OvertimeBreakdown]) {
+        normalDuration = breakdowns.reduce(0) { $0 + $1.normalDuration }
+        totalOvertime = breakdowns.reduce(0) { $0 + $1.totalOvertime }
+        earlyOvertime = breakdowns.reduce(0) { $0 + $1.earlyOvertime }
+        lateOvertime = breakdowns.reduce(0) { $0 + $1.lateOvertime }
+        workdayOvertime = breakdowns.reduce(0) { $0 + $1.workdayOvertime }
+        restDayOvertime = breakdowns.reduce(0) { $0 + $1.restDayOvertime }
+    }
+
+    var workdayOvertimeText: String? {
+        guard workdayOvertime > 0 else { return nil }
+        return "工作日加班 \(TimeTraceFormat.duration(workdayOvertime))"
+    }
+}
+
 struct HistoryView: View {
     @Environment(\.timeTraceDesign) private var design
 
@@ -25,11 +73,10 @@ struct HistoryView: View {
         let overtime = overtimeBySessionID
         let daySpans = crossedDaysBySessionID
         let visibleSummaries = Array(allSummaries.prefix(displayedHistoryCount))
-        let leftSummaries = visibleSummaries.enumerated().compactMap { index, summary in
-            index.isMultiple(of: 2) ? summary : nil
-        }
-        let rightSummaries = visibleSummaries.enumerated().compactMap { index, summary in
-            index.isMultiple(of: 2) ? nil : summary
+        let columns = HistoryMasonryColumns.distribute(visibleSummaries) { summary in
+            let crossDayLine = summary.sessions.contains { (daySpans[$0.id] ?? 0) > 0 } ? 1 : 0
+            let overtimeLine = summary.sessions.contains { (overtime[$0.id]?.totalOvertime ?? 0) > 0 } ? 1 : 0
+            return 4 + summary.sessionCount * 2 + crossDayLine + overtimeLine
         }
 
         ScrollView(showsIndicators: false) {
@@ -116,15 +163,17 @@ struct HistoryView: View {
                     // below a short card when the neighboring card is taller.
                     HStack(alignment: .top, spacing: 8) {
                         LazyVStack(spacing: 8) {
-                            ForEach(leftSummaries) { summary in
-                                historyCard(summary, visibleSummaries: visibleSummaries, allSummaries: allSummaries)
+                            ForEach(columns.left) { summary in
+                                historyCard(summary, visibleSummaries: visibleSummaries, allSummaries: allSummaries,
+                                            origins: origins, overtime: overtime, crossedDays: daySpans)
                             }
                         }
                         .frame(maxWidth: .infinity, alignment: .top)
 
                         LazyVStack(spacing: 8) {
-                            ForEach(rightSummaries) { summary in
-                                historyCard(summary, visibleSummaries: visibleSummaries, allSummaries: allSummaries)
+                            ForEach(columns.right) { summary in
+                                historyCard(summary, visibleSummaries: visibleSummaries, allSummaries: allSummaries,
+                                            origins: origins, overtime: overtime, crossedDays: daySpans)
                             }
                         }
                         .frame(maxWidth: .infinity, alignment: .top)
@@ -230,7 +279,7 @@ struct HistoryView: View {
     }
 
     private var originBySessionID: [UUID: HistoryRecordOrigin] {
-        Dictionary(uniqueKeysWithValues: workSessions.map { ($0.id, origin(for: $0)) })
+        HistoryRecordOrigin.map(sessions: workSessions, events: model.events)
     }
 
     private var overtimeBySessionID: [UUID: OvertimeBreakdown] {
@@ -241,29 +290,6 @@ struct HistoryView: View {
 
     private var crossedDaysBySessionID: [UUID: Int] {
         Dictionary(uniqueKeysWithValues: workSessions.map { ($0.id, model.crossedDayCount(for: $0)) })
-    }
-
-    private func origin(for session: ActivitySession) -> HistoryRecordOrigin {
-        let startEvent = model.events.first { $0.id == session.startEventId }
-
-        // An orphaned exit repaired by the user has a manual start event, but it
-        // is semantically a backfill rather than a newly-added work session.
-        if startEvent?.metadata.values["repairsEventId"] != nil {
-            return .backfilled
-        }
-        if startEvent?.eventType == .manualStart {
-            return .manual
-        }
-
-        let wasAdjusted = model.events.contains { event in
-            event.eventType == .sessionAdjusted &&
-            event.metadata.values["adjustmentKind"] != WorkScheduleSnapshot.adjustmentKind &&
-            event.metadata.values["sessionId"] == session.id.uuidString
-        }
-        if wasAdjusted || session.status == .manuallyAdjusted {
-            return .backfilled
-        }
-        return .system
     }
 
     private func completedSummary(from summary: DailyActivitySummary) -> DailyActivitySummary? {
@@ -296,15 +322,18 @@ struct HistoryView: View {
     private func historyCard(
         _ summary: DailyActivitySummary,
         visibleSummaries: [DailyActivitySummary],
-        allSummaries: [DailyActivitySummary]
+        allSummaries: [DailyActivitySummary],
+        origins: [UUID: HistoryRecordOrigin],
+        overtime: [UUID: OvertimeBreakdown],
+        crossedDays: [UUID: Int]
     ) -> some View {
         Button { selectedSummary = summary } label: {
             HistoryDayCard(
                 summary: summary,
                 durationTier: durationTier(for: summary.totalDuration),
-                origins: originBySessionID,
-                overtime: overtimeBySessionID,
-                crossedDays: crossedDaysBySessionID
+                origins: origins,
+                overtime: overtime,
+                crossedDays: crossedDays
             )
             .contentShape(RoundedRectangle(cornerRadius: 22, style: .continuous))
         }
@@ -408,10 +437,35 @@ private enum HistorySessionState {
     }
 }
 
-private enum HistoryRecordOrigin {
+enum HistoryRecordOrigin {
     case system
     case manual
     case backfilled
+
+    static func map(sessions: [ActivitySession], events: [ActivityEvent]) -> [UUID: Self] {
+        let eventsByID = Dictionary(events.map { ($0.id, $0) }, uniquingKeysWith: { first, _ in first })
+        let adjustedSessionIDs = Set(events.compactMap { event -> UUID? in
+            guard event.eventType == .sessionAdjusted,
+                  event.metadata.values["adjustmentKind"] != WorkScheduleSnapshot.adjustmentKind,
+                  let sessionID = event.metadata.values["sessionId"] else { return nil }
+            return UUID(uuidString: sessionID)
+        })
+        return Dictionary(uniqueKeysWithValues: sessions.map { session in
+            let startEvent = session.startEventId.flatMap { eventsByID[$0] }
+            let origin: Self
+            // A repaired orphaned exit has a manual start but is a backfill.
+            if startEvent?.metadata.values["repairsEventId"] != nil {
+                origin = .backfilled
+            } else if startEvent?.eventType == .manualStart {
+                origin = .manual
+            } else if adjustedSessionIDs.contains(session.id) || session.status == .manuallyAdjusted {
+                origin = .backfilled
+            } else {
+                origin = .system
+            }
+            return (session.id, origin)
+        })
+    }
 
     var label: String {
         switch self {
@@ -567,11 +621,8 @@ private struct HistoryDayCard: View {
         summary.sessions.map { crossedDays[$0.id] ?? 0 }.max() ?? 0
     }
 
-    private var totalOvertime: TimeInterval {
-        summary.sessions.compactMap { overtime[$0.id]?.totalOvertime }.reduce(0, +)
-    }
-
     var body: some View {
+        let presentation = HistoryOvertimePresentation(summary.sessions.compactMap { overtime[$0.id] })
         VStack(alignment: .leading, spacing: 14) {
             HStack(alignment: .top, spacing: 8) {
                 Text(TimeTraceFormat.day.string(from: summary.date))
@@ -602,8 +653,13 @@ private struct HistoryDayCard: View {
                 Text("\(summary.sessionCount) 个记录时段 · \(durationTier.label)")
                     .font(.caption)
                     .foregroundStyle(.secondary)
-                if totalOvertime > 0 {
-                    Text("加班 \(TimeTraceFormat.duration(totalOvertime))")
+                if presentation.totalOvertime > 0 {
+                    Text("加班 \(TimeTraceFormat.duration(presentation.totalOvertime))")
+                        .font(.caption.weight(.semibold))
+                        .foregroundStyle(design.violet)
+                }
+                if let workdayText = presentation.workdayOvertimeText {
+                    Text(workdayText)
                         .font(.caption.weight(.semibold))
                         .foregroundStyle(design.violet)
                 }
@@ -662,6 +718,9 @@ private struct HistoryDayDetailView: View {
     @State private var editingSession: ActivitySession?
 
     var body: some View {
+        let breakdowns = summary.sessions.compactMap { overtime[$0.id] }
+        let presentation = HistoryOvertimePresentation(breakdowns)
+        let hasCompleteBreakdown = !summary.sessions.isEmpty && breakdowns.count == summary.sessions.count
         NavigationStack {
             List {
                 Section {
@@ -674,16 +733,19 @@ private struct HistoryDayDetailView: View {
                         TimeTraceFormat.time.string(from: $0)
                     } ?? "未检测到")
                     if hasCompleteBreakdown {
-                        LabeledContent("正常工时", value: TimeTraceFormat.duration(totalNormalDuration))
-                        LabeledContent("加班总计", value: TimeTraceFormat.duration(totalOvertime))
-                        if totalEarlyOvertime > 0 {
-                            LabeledContent("早到加班", value: TimeTraceFormat.duration(totalEarlyOvertime))
+                        LabeledContent("正常工时", value: TimeTraceFormat.duration(presentation.normalDuration))
+                        LabeledContent("加班总计", value: TimeTraceFormat.duration(presentation.totalOvertime))
+                        if presentation.earlyOvertime > 0 {
+                            LabeledContent("早到加班", value: TimeTraceFormat.duration(presentation.earlyOvertime))
                         }
-                        if totalLateOvertime > 0 {
-                            LabeledContent("晚走加班", value: TimeTraceFormat.duration(totalLateOvertime))
+                        if presentation.lateOvertime > 0 {
+                            LabeledContent("晚走加班", value: TimeTraceFormat.duration(presentation.lateOvertime))
                         }
-                        if totalRestDayOvertime > 0 {
-                            LabeledContent("休息日加班", value: TimeTraceFormat.duration(totalRestDayOvertime))
+                        if presentation.workdayOvertime > 0 {
+                            LabeledContent("工作日加班", value: TimeTraceFormat.duration(presentation.workdayOvertime))
+                        }
+                        if presentation.restDayOvertime > 0 {
+                            LabeledContent("休息日加班", value: TimeTraceFormat.duration(presentation.restDayOvertime))
                         }
                     }
                 }
@@ -729,33 +791,6 @@ private struct HistoryDayDetailView: View {
         }
     }
 
-    private var sessionBreakdowns: [OvertimeBreakdown] {
-        summary.sessions.compactMap { overtime[$0.id] }
-    }
-
-    private var hasCompleteBreakdown: Bool {
-        !summary.sessions.isEmpty && sessionBreakdowns.count == summary.sessions.count
-    }
-
-    private var totalNormalDuration: TimeInterval {
-        sessionBreakdowns.map(\.normalDuration).reduce(0, +)
-    }
-
-    private var totalOvertime: TimeInterval {
-        sessionBreakdowns.map(\.totalOvertime).reduce(0, +)
-    }
-
-    private var totalEarlyOvertime: TimeInterval {
-        sessionBreakdowns.map(\.earlyOvertime).reduce(0, +)
-    }
-
-    private var totalLateOvertime: TimeInterval {
-        sessionBreakdowns.map(\.lateOvertime).reduce(0, +)
-    }
-
-    private var totalRestDayOvertime: TimeInterval {
-        sessionBreakdowns.map(\.restDayOvertime).reduce(0, +)
-    }
 }
 
 private struct HistoryDetailSessionRow: View {
@@ -794,6 +829,9 @@ private struct HistoryDetailSessionRow: View {
                         }
                         if overtime.lateOvertime > 0 {
                             Text("晚走 \(TimeTraceFormat.duration(overtime.lateOvertime))")
+                        }
+                        if let workdayText = HistoryOvertimePresentation([overtime]).workdayOvertimeText {
+                            Text(workdayText)
                         }
                         if overtime.restDayOvertime > 0 {
                             Text("休息日 \(TimeTraceFormat.duration(overtime.restDayOvertime))")
@@ -855,6 +893,11 @@ private struct HistorySessionItem: View {
                 .font(.caption2.weight(.semibold))
                 .foregroundStyle(tint)
             }
+            if let overtime, let workdayText = HistoryOvertimePresentation([overtime]).workdayOvertimeText {
+                Text(workdayText)
+                    .font(.caption2.weight(.semibold))
+                    .foregroundStyle(tint)
+            }
         }
         .frame(maxWidth: .infinity, alignment: .leading)
         .padding(10)
@@ -870,59 +913,6 @@ private struct HistorySessionItem: View {
             return session.status == .active ? "正在记录" : "结束时间缺失"
         }
         return TimeTraceFormat.duration(duration)
-    }
-}
-
-private struct MasonryLayout: Layout {
-    let columns: Int
-    let spacing: CGFloat
-
-    func sizeThatFits(
-        proposal: ProposedViewSize,
-        subviews: Subviews,
-        cache: inout ()
-    ) -> CGSize {
-        guard let width = proposal.width, !subviews.isEmpty else { return .zero }
-        let itemWidth = columnWidth(for: width)
-        var heights = Array(repeating: CGFloat.zero, count: columns)
-
-        for subview in subviews {
-            let column = shortestColumn(in: heights)
-            let size = subview.sizeThatFits(.init(width: itemWidth, height: nil))
-            heights[column] += size.height + spacing
-        }
-
-        return CGSize(width: width, height: max(0, (heights.max() ?? 0) - spacing))
-    }
-
-    func placeSubviews(
-        in bounds: CGRect,
-        proposal: ProposedViewSize,
-        subviews: Subviews,
-        cache: inout ()
-    ) {
-        let itemWidth = columnWidth(for: bounds.width)
-        var heights = Array(repeating: bounds.minY, count: columns)
-
-        for subview in subviews {
-            let column = shortestColumn(in: heights)
-            let size = subview.sizeThatFits(.init(width: itemWidth, height: nil))
-            let x = bounds.minX + CGFloat(column) * (itemWidth + spacing)
-            subview.place(
-                at: CGPoint(x: x, y: heights[column]),
-                anchor: .topLeading,
-                proposal: .init(width: itemWidth, height: size.height)
-            )
-            heights[column] += size.height + spacing
-        }
-    }
-
-    private func columnWidth(for totalWidth: CGFloat) -> CGFloat {
-        (totalWidth - CGFloat(columns - 1) * spacing) / CGFloat(columns)
-    }
-
-    private func shortestColumn(in heights: [CGFloat]) -> Int {
-        heights.enumerated().min { $0.element < $1.element }?.offset ?? 0
     }
 }
 
