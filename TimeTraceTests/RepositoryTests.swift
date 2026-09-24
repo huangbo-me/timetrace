@@ -319,7 +319,10 @@ final class RepositoryTests: XCTestCase {
         let source = try PersistenceController(inMemory: true)
         let activity = ActivityDefinition(name: "备份活动", type: .custom)
         let trigger = ActivityTrigger(activityId: activity.id, type: .geofence,
-                                      latitude: 31.2, longitude: 121.4, radius: 200, placeName: "办公室")
+                                      latitude: 31.2, longitude: 121.4, radius: 200, placeName: "办公室",
+                                      workCalendarMode: .chinaStatutory,
+                                      workScheduleMode: .flexibleDuration,
+                                      standardWorkMinutes: 8 * 60, restMinutes: 3 * 60)
         let event = ActivityEvent(activityId: activity.id, eventType: .manualStart,
                                   timestamp: Date(), source: .user)
         event.disposition = .applied
@@ -354,7 +357,34 @@ final class RepositoryTests: XCTestCase {
         XCTAssertEqual(restored.events.first?.dispositionRaw, event.dispositionRaw)
         XCTAssertEqual(restored.instances.first?.sessionId, session.id)
         XCTAssertEqual(restored.triggers.first?.latitude, trigger.latitude)
+        XCTAssertEqual(restored.triggers.first?.workCalendarModeRaw,
+                       WorkCalendarMode.chinaStatutory.rawValue)
+        XCTAssertEqual(restored.triggers.first?.workScheduleModeRaw,
+                       WorkScheduleMode.flexibleDuration.rawValue)
+        XCTAssertEqual(restored.triggers.first?.standardWorkMinutes, 8 * 60)
+        XCTAssertEqual(restored.triggers.first?.restMinutes, 3 * 60)
         XCTAssertEqual(restored.evidence.first?.sessionId, session.id)
+
+        let legacyTriggerJSON = try JSONSerialization.data(withJSONObject: [
+            "id": UUID().uuidString,
+            "activityId": activity.id.uuidString,
+            "typeRaw": ActivityTriggerType.geofence.rawValue,
+            "isEnabled": true,
+            "isDemoData": false,
+            "placeTypeRaw": PlaceType.work.rawValue,
+            "weekdaysMask": 62,
+            "timeZoneIdentifier": "Asia/Shanghai",
+            "createdAt": 0,
+            "updatedAt": 0
+        ])
+        let legacyRecord = try JSONDecoder().decode(ActivityTriggerRecord.self,
+                                                    from: legacyTriggerJSON)
+        let legacyTrigger = legacyRecord.makeModel()
+        XCTAssertEqual(legacyTrigger.workCalendarMode, .customWeekdays)
+        XCTAssertEqual(legacyTrigger.workScheduleMode, .fixedWindow)
+        XCTAssertEqual(legacyTrigger.standardWorkMinutes, 8 * 60)
+        XCTAssertEqual(legacyTrigger.restMinutes, 0)
+
         var oldBackup = decoded
         oldBackup.activities[0].name = "旧名称"
         XCTAssertEqual(try service.merge(oldBackup), 0)

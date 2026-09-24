@@ -263,6 +263,52 @@ final class AnalyticsServiceTests: XCTestCase {
         XCTAssertEqual(summary.firstArrivalTime, overnight.startAt)
     }
 
+    func testWorkScheduleSnapshotRoundTripsModesAndDurations() throws {
+        let snapshot = try XCTUnwrap(WorkScheduleSnapshot(
+            weekdaysMask: 0b0111110,
+            startMinute: nil,
+            endMinute: nil,
+            timeZoneIdentifier: "Asia/Shanghai",
+            isEnabled: true,
+            calendarMode: .chinaStatutory,
+            scheduleMode: .flexibleDuration,
+            standardWorkMinutes: 8 * 60,
+            restMinutes: 3 * 60
+        ))
+        let decoded = try XCTUnwrap(WorkScheduleSnapshot(metadata: snapshot.adding(to: .empty)))
+        XCTAssertEqual(decoded, snapshot)
+    }
+
+    func testLegacyScheduleMetadataKeepsOldSemantics() throws {
+        let metadata = EventMetadata(values: [
+            "workScheduleEnabled": "true",
+            "workScheduleWeekdaysMask": "62",
+            "workScheduleStartMinute": "540",
+            "workScheduleEndMinute": "1080",
+            "workScheduleTimeZoneIdentifier": "Asia/Shanghai"
+        ])
+        let snapshot = try XCTUnwrap(WorkScheduleSnapshot(metadata: metadata))
+        XCTAssertEqual(snapshot.calendarMode, .customWeekdays)
+        XCTAssertEqual(snapshot.scheduleMode, .fixedWindow)
+        XCTAssertEqual(snapshot.standardWorkMinutes, 8 * 60)
+        XCTAssertEqual(snapshot.restMinutes, 0)
+    }
+
+    func testScheduleRejectsOutOfRangeStandardAndRestMinutes() {
+        XCTAssertNil(WorkScheduleSnapshot(
+            weekdaysMask: 62, startMinute: nil, endMinute: nil,
+            timeZoneIdentifier: "Asia/Shanghai", isEnabled: true,
+            calendarMode: .chinaStatutory, scheduleMode: .flexibleDuration,
+            standardWorkMinutes: 0, restMinutes: 0
+        ))
+        XCTAssertNil(WorkScheduleSnapshot(
+            weekdaysMask: 62, startMinute: 540, endMinute: 1080,
+            timeZoneIdentifier: "Asia/Shanghai", isEnabled: true,
+            calendarMode: .chinaStatutory, scheduleMode: .fixedWindow,
+            standardWorkMinutes: 480, restMinutes: 12 * 60 + 30
+        ))
+    }
+
     func testNightShiftSplitsEarlyAndLateOvertime() throws {
         let schedule = try XCTUnwrap(WorkScheduleSnapshot(
             weekdaysMask: 0b1111111, startMinute: 22 * 60, endMinute: 8 * 60,

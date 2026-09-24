@@ -67,6 +67,10 @@ struct ActivityTriggerRecord: Codable, Sendable {
     var normalStartMinute: Int?
     var normalEndMinute: Int?
     var timeZoneIdentifier: String
+    var workCalendarModeRaw: String?
+    var workScheduleModeRaw: String?
+    var standardWorkMinutes: Int?
+    var restMinutes: Int?
     var createdAt: Date
     var updatedAt: Date
 
@@ -88,6 +92,10 @@ struct ActivityTriggerRecord: Codable, Sendable {
         normalStartMinute = model.normalStartMinute
         normalEndMinute = model.normalEndMinute
         timeZoneIdentifier = model.timeZoneIdentifier
+        workCalendarModeRaw = model.workCalendarModeRaw
+        workScheduleModeRaw = model.workScheduleModeRaw
+        standardWorkMinutes = model.standardWorkMinutes
+        restMinutes = model.restMinutes
         createdAt = model.createdAt
         updatedAt = model.updatedAt
     }
@@ -111,6 +119,10 @@ struct ActivityTriggerRecord: Codable, Sendable {
         model.normalStartMinute = normalStartMinute
         model.normalEndMinute = normalEndMinute
         model.timeZoneIdentifier = timeZoneIdentifier
+        model.workCalendarModeRaw = workCalendarModeRaw ?? WorkCalendarMode.customWeekdays.rawValue
+        model.workScheduleModeRaw = workScheduleModeRaw ?? WorkScheduleMode.fixedWindow.rawValue
+        model.standardWorkMinutes = standardWorkMinutes ?? 8 * 60
+        model.restMinutes = restMinutes ?? 0
         model.createdAt = createdAt
         model.updatedAt = updatedAt
         return model

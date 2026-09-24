@@ -109,6 +109,20 @@ enum WorkScheduleEditScope: String, Codable {
     case allHistory
 }
 
+enum WorkCalendarMode: String, Codable, CaseIterable, Identifiable {
+    case chinaStatutory
+    case customWeekdays
+
+    var id: String { rawValue }
+}
+
+enum WorkScheduleMode: String, Codable, CaseIterable, Identifiable {
+    case fixedWindow
+    case flexibleDuration
+
+    var id: String { rawValue }
+}
+
 struct WorkScheduleSnapshot: Codable, Equatable {
     static let adjustmentKind = "workSchedule"
 
@@ -117,23 +131,39 @@ struct WorkScheduleSnapshot: Codable, Equatable {
     let endMinute: Int?
     let timeZoneIdentifier: String
     let isEnabled: Bool
+    let calendarMode: WorkCalendarMode
+    let scheduleMode: WorkScheduleMode
+    let standardWorkMinutes: Int
+    let restMinutes: Int
 
     init?(weekdaysMask: Int, startMinute: Int?, endMinute: Int?,
-          timeZoneIdentifier: String, isEnabled: Bool) {
+          timeZoneIdentifier: String, isEnabled: Bool,
+          calendarMode: WorkCalendarMode = .customWeekdays,
+          scheduleMode: WorkScheduleMode = .fixedWindow,
+          standardWorkMinutes: Int = 8 * 60,
+          restMinutes: Int = 0) {
         let boundedMask = weekdaysMask & 0b1111111
         guard let timeZone = TimeZone(identifier: timeZoneIdentifier) else { return nil }
-        if isEnabled {
+        guard (30...960).contains(standardWorkMinutes), standardWorkMinutes.isMultiple(of: 30),
+              (0...720).contains(restMinutes), restMinutes.isMultiple(of: 30) else { return nil }
+        if isEnabled && scheduleMode == .fixedWindow {
             guard boundedMask != 0,
                   let startMinute, let endMinute,
                   (0..<1_440).contains(startMinute),
                   (0..<1_440).contains(endMinute),
                   startMinute != endMinute else { return nil }
+        } else if isEnabled {
+            guard boundedMask != 0 else { return nil }
         }
         self.weekdaysMask = boundedMask
         self.startMinute = startMinute
         self.endMinute = endMinute
         self.timeZoneIdentifier = timeZone.identifier
         self.isEnabled = isEnabled
+        self.calendarMode = calendarMode
+        self.scheduleMode = scheduleMode
+        self.standardWorkMinutes = standardWorkMinutes
+        self.restMinutes = restMinutes
     }
 
     init?(metadata: EventMetadata) {
@@ -145,8 +175,38 @@ struct WorkScheduleSnapshot: Codable, Equatable {
               let timeZoneIdentifier = values["workScheduleTimeZoneIdentifier"] else { return nil }
         let start = values["workScheduleStartMinute"].flatMap(Int.init)
         let end = values["workScheduleEndMinute"].flatMap(Int.init)
+        let calendarMode: WorkCalendarMode
+        if let rawValue = values["workScheduleCalendarMode"] {
+            guard let decoded = WorkCalendarMode(rawValue: rawValue) else { return nil }
+            calendarMode = decoded
+        } else {
+            calendarMode = .customWeekdays
+        }
+        let scheduleMode: WorkScheduleMode
+        if let rawValue = values["workScheduleMode"] {
+            guard let decoded = WorkScheduleMode(rawValue: rawValue) else { return nil }
+            scheduleMode = decoded
+        } else {
+            scheduleMode = .fixedWindow
+        }
+        let standardWorkMinutes: Int
+        if let rawValue = values["workScheduleStandardMinutes"] {
+            guard let decoded = Int(rawValue) else { return nil }
+            standardWorkMinutes = decoded
+        } else {
+            standardWorkMinutes = 8 * 60
+        }
+        let restMinutes: Int
+        if let rawValue = values["workScheduleRestMinutes"] {
+            guard let decoded = Int(rawValue) else { return nil }
+            restMinutes = decoded
+        } else {
+            restMinutes = 0
+        }
         self.init(weekdaysMask: mask, startMinute: start, endMinute: end,
-                  timeZoneIdentifier: timeZoneIdentifier, isEnabled: enabled)
+                  timeZoneIdentifier: timeZoneIdentifier, isEnabled: enabled,
+                  calendarMode: calendarMode, scheduleMode: scheduleMode,
+                  standardWorkMinutes: standardWorkMinutes, restMinutes: restMinutes)
     }
 
     func adding(to metadata: EventMetadata) -> EventMetadata {
@@ -156,6 +216,10 @@ struct WorkScheduleSnapshot: Codable, Equatable {
         result.values["workScheduleTimeZoneIdentifier"] = timeZoneIdentifier
         result.values["workScheduleStartMinute"] = startMinute.map(String.init)
         result.values["workScheduleEndMinute"] = endMinute.map(String.init)
+        result.values["workScheduleCalendarMode"] = calendarMode.rawValue
+        result.values["workScheduleMode"] = scheduleMode.rawValue
+        result.values["workScheduleStandardMinutes"] = String(standardWorkMinutes)
+        result.values["workScheduleRestMinutes"] = String(restMinutes)
         return result
     }
 }
@@ -167,7 +231,11 @@ extension ActivityTrigger {
             startMinute: normalStartMinute,
             endMinute: normalEndMinute,
             timeZoneIdentifier: timeZoneIdentifier,
-            isEnabled: normalStartMinute != nil || normalEndMinute != nil
+            isEnabled: normalStartMinute != nil || normalEndMinute != nil,
+            calendarMode: workCalendarMode,
+            scheduleMode: workScheduleMode,
+            standardWorkMinutes: standardWorkMinutes,
+            restMinutes: restMinutes
         )
     }
 }
@@ -252,6 +320,10 @@ final class ActivityTrigger {
     var normalStartMinute: Int?
     var normalEndMinute: Int?
     var timeZoneIdentifier: String = TimeZone.current.identifier
+    var workCalendarModeRaw: String = WorkCalendarMode.customWeekdays.rawValue
+    var workScheduleModeRaw: String = WorkScheduleMode.fixedWindow.rawValue
+    var standardWorkMinutes: Int = 8 * 60
+    var restMinutes: Int = 0
     var createdAt: Date = Date()
     var updatedAt: Date = Date()
 
@@ -266,7 +338,10 @@ final class ActivityTrigger {
          placeName: String? = nil, placeType: PlaceType = .work,
          regionIdentifier: String? = nil, weekdaysMask: Int = 0, hour: Int? = nil,
          minute: Int? = nil, normalStartMinute: Int? = nil, normalEndMinute: Int? = nil,
-         timeZoneIdentifier: String = TimeZone.current.identifier) {
+         timeZoneIdentifier: String = TimeZone.current.identifier,
+         workCalendarMode: WorkCalendarMode = .customWeekdays,
+         workScheduleMode: WorkScheduleMode = .fixedWindow,
+         standardWorkMinutes: Int = 8 * 60, restMinutes: Int = 0) {
         self.id = id
         self.activityId = activityId
         self.typeRaw = type.rawValue
@@ -284,6 +359,10 @@ final class ActivityTrigger {
         self.normalStartMinute = normalStartMinute
         self.normalEndMinute = normalEndMinute
         self.timeZoneIdentifier = timeZoneIdentifier
+        self.workCalendarModeRaw = workCalendarMode.rawValue
+        self.workScheduleModeRaw = workScheduleMode.rawValue
+        self.standardWorkMinutes = standardWorkMinutes
+        self.restMinutes = restMinutes
     }
 
     var displayPlaceName: String {
@@ -294,6 +373,16 @@ final class ActivityTrigger {
     var placeType: PlaceType {
         get { PlaceType(rawValue: placeTypeRaw) ?? .work }
         set { placeTypeRaw = newValue.rawValue }
+    }
+
+    var workCalendarMode: WorkCalendarMode {
+        get { WorkCalendarMode(rawValue: workCalendarModeRaw) ?? .customWeekdays }
+        set { workCalendarModeRaw = newValue.rawValue }
+    }
+
+    var workScheduleMode: WorkScheduleMode {
+        get { WorkScheduleMode(rawValue: workScheduleModeRaw) ?? .fixedWindow }
+        set { workScheduleModeRaw = newValue.rawValue }
     }
 }
 
