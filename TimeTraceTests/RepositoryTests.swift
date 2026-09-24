@@ -18,6 +18,12 @@ private final class NotificationFixtureCoder: NSCoder {
 
 @MainActor
 final class RepositoryTests: XCTestCase {
+    private func legacySchedule(weekdaysMask: Int, startMinute: Int?, endMinute: Int?) -> WorkScheduleSnapshot {
+        WorkScheduleSnapshot(weekdaysMask: weekdaysMask, startMinute: startMinute, endMinute: endMinute,
+                             timeZoneIdentifier: TimeZone.current.identifier,
+                             isEnabled: startMinute != nil || endMinute != nil)!
+    }
+
     func testReminderNotificationCallbacksCompleteBeforeDeliveringActions() async throws {
         let definitionID = UUID()
         let date = Date(timeIntervalSince1970: 123456)
@@ -116,7 +122,7 @@ final class RepositoryTests: XCTestCase {
             let source = AppModel(inMemory: true, geofence: sourceGeofence, notifications: FakeNotificationService())
             source.load()
             source.finishOnboarding(latitude: 31.2, longitude: 121.4, radius: 150,
-                                    weekdaysMask: 62, normalStartMinute: nil, normalEndMinute: nil)
+                                    schedule: legacySchedule(weekdaysMask: 62, startMinute: nil, endMinute: nil))
             let sourcePlace = try XCTUnwrap(source.workTrigger)
             let start = Calendar.current.startOfDay(for: Date()).addingTimeInterval(-86_400 + 3600)
             sourceGeofence.emit(.entered(triggerId: sourcePlace.id, timestamp: start))
@@ -137,7 +143,7 @@ final class RepositoryTests: XCTestCase {
             let target = AppModel(inMemory: true, geofence: targetGeofence, notifications: FakeNotificationService())
             target.load()
             target.finishOnboarding(latitude: 32.2, longitude: 120.4, radius: 150,
-                                    weekdaysMask: 62, normalStartMinute: nil, normalEndMinute: nil)
+                                    schedule: legacySchedule(weekdaysMask: 62, startMinute: nil, endMinute: nil))
             let localPlace = try XCTUnwrap(target.workTrigger)
             targetGeofence.emit(.entered(triggerId: localPlace.id, timestamp: start))
             targetGeofence.emit(.exited(triggerId: localPlace.id, timestamp: start.addingTimeInterval(7200)))
@@ -180,7 +186,7 @@ final class RepositoryTests: XCTestCase {
         let source = AppModel(inMemory: true, geofence: sourceGeofence, notifications: FakeNotificationService())
         source.load()
         source.finishOnboarding(latitude: 31.2, longitude: 121.4, radius: 150,
-                                weekdaysMask: 62, normalStartMinute: nil, normalEndMinute: nil)
+                                schedule: legacySchedule(weekdaysMask: 62, startMinute: nil, endMinute: nil))
         let placeID = try XCTUnwrap(source.workTrigger?.id)
         let start = Date().addingTimeInterval(-7200)
         sourceGeofence.emit(.entered(triggerId: placeID, timestamp: start))
@@ -217,7 +223,7 @@ final class RepositoryTests: XCTestCase {
         let model = AppModel(inMemory: true, geofence: geofence, notifications: FakeNotificationService())
         model.load()
         model.finishOnboarding(latitude: 31.2, longitude: 121.4, radius: 200,
-                               weekdaysMask: 62, normalStartMinute: nil, normalEndMinute: nil)
+                               schedule: legacySchedule(weekdaysMask: 62, startMinute: nil, endMinute: nil))
         let place = try XCTUnwrap(model.workTrigger)
         let registrations = geofence.registeredTriggerIds.count
         XCTAssertTrue(model.updateWorkplace(triggerId: place.id, latitude: 31.3, longitude: 121.5,
@@ -453,7 +459,7 @@ final class RepositoryTests: XCTestCase {
         model.load()
         XCTAssertTrue(model.automaticRecordingDetail.contains("添加或启用"))
         model.finishOnboarding(latitude: 31.2, longitude: 121.4, radius: 100,
-                               weekdaysMask: 62, normalStartMinute: nil, normalEndMinute: nil,
+                               schedule: legacySchedule(weekdaysMask: 62, startMinute: nil, endMinute: nil),
                                placeName: "办公室")
         XCTAssertTrue(model.automaticRecordingDetail.contains("休息日也会记录"))
         geofence.setAuthorizationStatus(.denied)
@@ -565,9 +571,7 @@ final class RepositoryTests: XCTestCase {
             latitude: 31.2,
             longitude: 121.4,
             radius: 200,
-            weekdaysMask: 0b0111110,
-            normalStartMinute: nil,
-            normalEndMinute: nil
+            schedule: legacySchedule(weekdaysMask: 0b0111110, startMinute: nil, endMinute: nil)
         )
 
         XCTAssertTrue(model.isOnboarded)
@@ -716,7 +720,7 @@ final class RepositoryTests: XCTestCase {
         let model = AppModel(inMemory: true, geofence: geofence, notifications: notifications)
         model.load()
         model.finishOnboarding(latitude: 31.2, longitude: 121.4, radius: 200,
-                               weekdaysMask: 0b0111110, normalStartMinute: 540, normalEndMinute: 1080,
+                               schedule: legacySchedule(weekdaysMask: 0b0111110, startMinute: 540, endMinute: 1080),
                                placeName: "创意园")
         let triggerId = try XCTUnwrap(model.workTrigger?.id)
         let start = Date().addingTimeInterval(-3600)
@@ -738,8 +742,7 @@ final class RepositoryTests: XCTestCase {
         let model = AppModel(inMemory: true, geofence: geofence, notifications: FakeNotificationService())
         model.load()
         model.finishOnboarding(latitude: 31.2, longitude: 121.4, radius: 200,
-                               weekdaysMask: 0b0111110, normalStartMinute: 22 * 60,
-                               normalEndMinute: 8 * 60)
+                               schedule: legacySchedule(weekdaysMask: 0b0111110, startMinute: 22 * 60, endMinute: 8 * 60))
         let place = try XCTUnwrap(model.workTrigger)
         geofence.emit(.entered(triggerId: place.id, timestamp: Date()))
         let entry = try XCTUnwrap(model.events.first { $0.eventType == .geofenceEnter })
@@ -750,22 +753,108 @@ final class RepositoryTests: XCTestCase {
         XCTAssertTrue(snapshot.isEnabled)
     }
 
+    func testWorkScheduleAffectedSessionsExcludeDeletedAndOtherPlacesAndSortDeterministically() throws {
+        let geofence = FakeGeofenceService()
+        let model = AppModel(inMemory: true, geofence: geofence, notifications: FakeNotificationService())
+        model.load()
+        model.finishOnboarding(latitude: 31.2, longitude: 121.4, radius: 200,
+                               schedule: legacySchedule(weekdaysMask: 62, startMinute: 540, endMinute: 1080))
+        let first = try XCTUnwrap(model.workTrigger)
+        XCTAssertTrue(model.addWorkplace(latitude: 31.3, longitude: 121.5, radius: 200, placeName: "B"))
+        let second = try XCTUnwrap(model.workTriggers.first { $0.id != first.id })
+        let now = Date()
+        geofence.emit(.entered(triggerId: first.id, timestamp: now.addingTimeInterval(-10_800)))
+        geofence.emit(.exited(triggerId: first.id, timestamp: now.addingTimeInterval(-9_000)))
+        geofence.emit(.entered(triggerId: first.id, timestamp: now.addingTimeInterval(-7_200)))
+        geofence.emit(.exited(triggerId: first.id, timestamp: now.addingTimeInterval(-5_400)))
+        geofence.emit(.entered(triggerId: first.id, timestamp: now.addingTimeInterval(-3_600)))
+        geofence.emit(.entered(triggerId: second.id, timestamp: now.addingTimeInterval(-1_800)))
+        let targets = model.sessions.filter { $0.placeTriggerId == first.id }.sorted { $0.startAt < $1.startAt }
+        targets[1].deletedAt = now
+        XCTAssertEqual(model.workScheduleAffectedSessionCount(triggerId: first.id), 2)
+        XCTAssertEqual(model.workScheduleAffectedSessions(triggerId: first.id).map(\.id), [targets[0].id, targets[2].id])
+        targets[2].startAt = targets[0].startAt
+        targets[0].id = UUID(uuidString: "00000000-0000-0000-0000-000000000002")!
+        targets[2].id = UUID(uuidString: "00000000-0000-0000-0000-000000000001")!
+        XCTAssertEqual(model.workScheduleAffectedSessions(triggerId: first.id).map(\.id), [targets[2].id, targets[0].id])
+    }
+
+    func testScheduleEnabledOverridePersistsAndBacksUpWithoutDiscardingScheduleValues() throws {
+        for (mode, enabled) in [(WorkScheduleMode.flexibleDuration, true), (.flexibleDuration, false), (.fixedWindow, false)] {
+            let persistence = try PersistenceController(inMemory: true)
+            let trigger = ActivityTrigger(activityId: UUID(), type: .geofence, weekdaysMask: 62,
+                                          normalStartMinute: 540, normalEndMinute: 1080,
+                                          timeZoneIdentifier: "Asia/Shanghai", workCalendarMode: .chinaStatutory,
+                                          workScheduleMode: mode, standardWorkMinutes: 480, restMinutes: 180)
+            trigger.workScheduleEnabledOverride = enabled
+            persistence.context.insert(trigger)
+            try persistence.context.save()
+            let backup = try DataBackupService(container: persistence.container).snapshot()
+            let encoded = try JSONEncoder().encode(backup)
+            let target = try PersistenceController(inMemory: true)
+            let service = DataBackupService(container: target.container)
+            _ = try service.merge(JSONDecoder().decode(BackupSnapshot.self, from: encoded))
+            let restored = try XCTUnwrap(try service.snapshot().triggers.first).makeModel()
+            XCTAssertEqual(restored.workScheduleEnabledOverride, enabled)
+            let schedule = try XCTUnwrap(restored.workScheduleSnapshot)
+            XCTAssertEqual(schedule.isEnabled, enabled)
+            XCTAssertEqual(schedule.scheduleMode, mode)
+            XCTAssertEqual(schedule.calendarMode, .chinaStatutory)
+            XCTAssertEqual(schedule.startMinute, 540)
+            XCTAssertEqual(schedule.endMinute, 1080)
+            XCTAssertEqual(schedule.standardWorkMinutes, 480)
+            XCTAssertEqual(schedule.restMinutes, 180)
+        }
+    }
+
+    func testLegacyScheduleEnabledInferenceUsesOnlyTimeFields() throws {
+        let trigger = ActivityTrigger(activityId: UUID(), type: .geofence, weekdaysMask: 62)
+        XCTAssertNil(trigger.workScheduleEnabledOverride)
+        XCTAssertEqual(trigger.workScheduleSnapshot?.isEnabled, false)
+        trigger.normalStartMinute = 540
+        trigger.normalEndMinute = 1080
+        XCTAssertEqual(trigger.workScheduleSnapshot?.isEnabled, true)
+        trigger.normalStartMinute = nil
+        trigger.normalEndMinute = nil
+        trigger.workScheduleMode = .flexibleDuration
+        XCTAssertEqual(trigger.workScheduleSnapshot?.isEnabled, false)
+        trigger.normalStartMinute = 540
+        trigger.normalEndMinute = 1080
+        XCTAssertEqual(trigger.workScheduleSnapshot?.isEnabled, true)
+        var json = try XCTUnwrap(JSONSerialization.jsonObject(with: JSONEncoder().encode(ActivityTriggerRecord(trigger))) as? [String: Any])
+        json.removeValue(forKey: "workScheduleEnabledOverride")
+        let legacy = try JSONDecoder().decode(ActivityTriggerRecord.self, from: JSONSerialization.data(withJSONObject: json)).makeModel()
+        XCTAssertNil(legacy.workScheduleEnabledOverride)
+        XCTAssertEqual(legacy.workScheduleSnapshot?.isEnabled, true)
+        legacy.normalStartMinute = nil
+        legacy.normalEndMinute = nil
+        XCTAssertEqual(legacy.workScheduleSnapshot?.isEnabled, false)
+    }
+
     func testFutureOnlyScheduleEditKeepsCurrentSnapshotAndAppliesToNextEntry() throws {
         let geofence = FakeGeofenceService()
         let model = AppModel(inMemory: true, geofence: geofence, notifications: FakeNotificationService())
         model.load()
         model.finishOnboarding(latitude: 31.2, longitude: 121.4, radius: 200,
-                               weekdaysMask: 0b0111110, normalStartMinute: 9 * 60,
-                               normalEndMinute: 18 * 60)
+                               schedule: legacySchedule(weekdaysMask: 0b0111110, startMinute: 9 * 60, endMinute: 18 * 60))
         let place = try XCTUnwrap(model.workTrigger)
-        let firstStart = Date().addingTimeInterval(-3_600)
+        let firstStart = try XCTUnwrap(ISO8601DateFormatter().date(from: "2026-09-21T08:00:00+08:00"))
+        let end = firstStart.addingTimeInterval(11 * 3_600)
+        place.timeZoneIdentifier = "Asia/Shanghai"
         geofence.emit(.entered(triggerId: place.id, timestamp: firstStart))
         let current = try XCTUnwrap(model.workSessions.first)
+        let oldBreakdown = try XCTUnwrap(model.overtimeBreakdown(for: current, now: end))
+        XCTAssertEqual(oldBreakdown.totalOvertime, 2 * 3_600)
+        let revised = try XCTUnwrap(WorkScheduleSnapshot(
+            weekdaysMask: 62, startMinute: nil, endMinute: nil, timeZoneIdentifier: "Asia/Shanghai",
+            isEnabled: true, calendarMode: .chinaStatutory, scheduleMode: .flexibleDuration,
+            standardWorkMinutes: 480, restMinutes: 180
+        ))
 
         XCTAssertTrue(model.updateWorkplace(
             triggerId: place.id, latitude: place.latitude!, longitude: place.longitude!,
             radius: place.radius!, placeName: place.displayPlaceName, placeType: .work,
-            weekdaysMask: 0b1111111, normalStartMinute: 22 * 60, normalEndMinute: 8 * 60,
+            schedule: revised,
             scheduleEditScope: .futureOnly
         ))
         let oldSnapshot = try XCTUnwrap(WorkScheduleResolver.snapshot(
@@ -773,15 +862,22 @@ final class RepositoryTests: XCTestCase {
         ))
         XCTAssertEqual(oldSnapshot.startMinute, 9 * 60)
         XCTAssertEqual(oldSnapshot.endMinute, 18 * 60)
+        XCTAssertEqual(oldSnapshot.calendarMode, .customWeekdays)
+        XCTAssertEqual(oldSnapshot.scheduleMode, .fixedWindow)
+        XCTAssertEqual(oldSnapshot.restMinutes, 0)
+        XCTAssertEqual(model.overtimeBreakdown(for: current, now: end), oldBreakdown)
+        XCTAssertEqual(place.workScheduleSnapshot, revised)
 
-        geofence.emit(.exited(triggerId: place.id, timestamp: firstStart.addingTimeInterval(1_800)))
+        geofence.emit(.exited(triggerId: place.id, timestamp: end))
+        XCTAssertEqual(model.overtimeBreakdown(for: current), oldBreakdown)
         geofence.emit(.entered(triggerId: place.id, timestamp: Date()))
         let next = try XCTUnwrap(model.workSessions.first { $0.endAt == nil })
         let newSnapshot = try XCTUnwrap(WorkScheduleResolver.snapshot(
             for: next, events: model.events, currentPlace: place
         ))
-        XCTAssertEqual(newSnapshot.startMinute, 22 * 60)
-        XCTAssertEqual(newSnapshot.endMinute, 8 * 60)
+        XCTAssertEqual(newSnapshot, revised)
+        let nextEntry = try XCTUnwrap(model.events.first { $0.id == next.startEventId })
+        XCTAssertEqual(WorkScheduleSnapshot(metadata: nextEntry.metadata), revised)
     }
 
     func testAllHistoryScheduleEditRevisesOnlyThatPlaceIncludingActiveSession() throws {
@@ -789,54 +885,129 @@ final class RepositoryTests: XCTestCase {
         let model = AppModel(inMemory: true, geofence: geofence, notifications: FakeNotificationService())
         model.load()
         model.finishOnboarding(latitude: 31.2, longitude: 121.4, radius: 200,
-                               weekdaysMask: 0b0111110, normalStartMinute: 9 * 60,
-                               normalEndMinute: 18 * 60, placeName: "A")
+                               schedule: legacySchedule(weekdaysMask: 0b0111110, startMinute: 9 * 60, endMinute: 18 * 60), placeName: "A")
         let first = try XCTUnwrap(model.workTrigger)
         XCTAssertTrue(model.addWorkplace(latitude: 31.3, longitude: 121.5, radius: 200,
                                          placeName: "B", placeType: .work))
         let second = try XCTUnwrap(model.workTriggers.first { $0.id != first.id })
-        let now = Date()
+        let now = try XCTUnwrap(ISO8601DateFormatter().date(from: "2026-09-22T12:00:00+08:00"))
+        geofence.emit(.entered(triggerId: first.id, timestamp: now.addingTimeInterval(-14_400)))
+        geofence.emit(.exited(triggerId: first.id, timestamp: now.addingTimeInterval(-12_600)))
+        let deleted = try XCTUnwrap(model.sessions.first)
+        XCTAssertTrue(model.deleteSession(deleted))
         geofence.emit(.entered(triggerId: first.id, timestamp: now.addingTimeInterval(-7_200)))
         geofence.emit(.exited(triggerId: first.id, timestamp: now.addingTimeInterval(-3_600)))
         geofence.emit(.entered(triggerId: first.id, timestamp: now.addingTimeInterval(-1_800)))
         geofence.emit(.entered(triggerId: second.id, timestamp: now.addingTimeInterval(-900)))
+        let affectedCount = model.workScheduleAffectedSessionCount(triggerId: first.id)
+        XCTAssertEqual(affectedCount, 2)
+        let revised = try XCTUnwrap(WorkScheduleSnapshot(
+            weekdaysMask: 62, startMinute: nil, endMinute: nil, timeZoneIdentifier: "Asia/Shanghai",
+            isEnabled: true, calendarMode: .chinaStatutory, scheduleMode: .flexibleDuration,
+            standardWorkMinutes: 480, restMinutes: 180
+        ))
 
         XCTAssertTrue(model.updateWorkplace(
             triggerId: first.id, latitude: first.latitude!, longitude: first.longitude!,
             radius: first.radius!, placeName: first.displayPlaceName, placeType: .work,
-            weekdaysMask: 0b1111111, normalStartMinute: 22 * 60, normalEndMinute: 8 * 60,
+            schedule: revised,
             scheduleEditScope: .allHistory
         ))
         let revisions = model.events.filter {
             $0.metadata.values["adjustmentKind"] == WorkScheduleSnapshot.adjustmentKind
         }
-        XCTAssertEqual(revisions.count, 2)
+        XCTAssertEqual(revisions.count, affectedCount)
+        XCTAssertTrue(revisions.allSatisfy { WorkScheduleSnapshot(metadata: $0.metadata) == revised })
+        XCTAssertFalse(revisions.contains { $0.metadata.values["sessionId"] == deleted.id.uuidString })
         let firstSessions = model.workSessions.filter { $0.placeTriggerId == first.id }
         XCTAssertEqual(firstSessions.count, 2)
         XCTAssertTrue(firstSessions.allSatisfy {
-            WorkScheduleResolver.snapshot(for: $0, events: model.events, currentPlace: first)?.startMinute == 22 * 60
+            WorkScheduleResolver.snapshot(for: $0, events: model.events, currentPlace: first) == revised
         })
         let other = try XCTUnwrap(model.workSessions.first { $0.placeTriggerId == second.id })
         XCTAssertEqual(WorkScheduleResolver.snapshot(
             for: other, events: model.events, currentPlace: second
         )?.startMinute, 9 * 60)
-    }
-
-    func testScheduleEditRejectsEqualStartAndEnd() throws {
-        let model = AppModel(inMemory: true, geofence: FakeGeofenceService(),
-                             notifications: FakeNotificationService())
-        model.load()
-        model.finishOnboarding(latitude: 31.2, longitude: 121.4, radius: 200,
-                               weekdaysMask: 0b0111110, normalStartMinute: 9 * 60,
-                               normalEndMinute: 18 * 60)
-        let place = try XCTUnwrap(model.workTrigger)
-        XCTAssertFalse(model.updateWorkplace(
-            triggerId: place.id, latitude: place.latitude!, longitude: place.longitude!,
-            radius: place.radius!, placeName: place.displayPlaceName, placeType: .work,
-            weekdaysMask: 0b0111110, normalStartMinute: 9 * 60, normalEndMinute: 9 * 60,
+        // A later future-only edit must not replace the stored historical revision.
+        XCTAssertTrue(model.updateWorkplace(
+            triggerId: first.id, latitude: first.latitude!, longitude: first.longitude!,
+            radius: first.radius!, placeName: first.displayPlaceName,
+            schedule: legacySchedule(weekdaysMask: 127, startMinute: 540, endMinute: 1080),
             scheduleEditScope: .futureOnly
         ))
-        XCTAssertEqual(place.normalEndMinute, 18 * 60)
+        for session in firstSessions {
+            let breakdown = try XCTUnwrap(model.overtimeBreakdown(for: session, now: now))
+            XCTAssertEqual(breakdown.normalDuration, 0)
+            XCTAssertEqual(breakdown.totalOvertime, 0)
+        }
+    }
+
+    func testScheduleEditRejectsEqualStartAndEndBeforeCallingUseCase() {
+        XCTAssertNil(WorkScheduleSnapshot(
+            weekdaysMask: 62, startMinute: 540, endMinute: 540,
+            timeZoneIdentifier: "Asia/Shanghai", isEnabled: true
+        ))
+    }
+
+    func testCompleteSchedulesPropagateThroughOnboardingAndAddingPlaces() throws {
+        let geofence = FakeGeofenceService()
+        let model = AppModel(inMemory: true, geofence: geofence, notifications: FakeNotificationService())
+        model.load()
+        let schedule = try XCTUnwrap(WorkScheduleSnapshot(
+            weekdaysMask: 62, startMinute: nil, endMinute: nil, timeZoneIdentifier: "Asia/Shanghai",
+            isEnabled: true, calendarMode: .chinaStatutory, scheduleMode: .flexibleDuration,
+            standardWorkMinutes: 480, restMinutes: 180
+        ))
+        model.finishOnboarding(latitude: 31.2, longitude: 121.4, radius: 200, schedule: schedule)
+        let first = try XCTUnwrap(model.workTrigger)
+        XCTAssertEqual(first.workScheduleSnapshot, schedule)
+        geofence.emit(.entered(triggerId: first.id, timestamp: Date().addingTimeInterval(-3_600)))
+        XCTAssertEqual(WorkScheduleSnapshot(metadata: try XCTUnwrap(model.events.first { $0.eventType == .geofenceEnter }).metadata), schedule)
+        XCTAssertTrue(model.addWorkplace(latitude: 31.3, longitude: 121.5, radius: 200, placeName: "B", schedule: schedule))
+        let second = try XCTUnwrap(model.workTriggers.first { $0.id != first.id })
+        XCTAssertEqual(second.workScheduleSnapshot, schedule)
+        XCTAssertTrue(model.addWorkplace(latitude: 31.4, longitude: 121.6, radius: 200, placeName: "C"))
+        let third = try XCTUnwrap(model.workTriggers.first { $0.displayPlaceName == "C" })
+        XCTAssertEqual(third.workScheduleSnapshot?.calendarMode, .chinaStatutory)
+        XCTAssertEqual(third.workScheduleSnapshot?.scheduleMode, .fixedWindow)
+        XCTAssertEqual(third.normalStartMinute, 540)
+        XCTAssertEqual(third.normalEndMinute, 1080)
+        XCTAssertEqual(third.restMinutes, 0)
+    }
+
+    func testExplicitlyDisabledSchedulesKeepTheirValuesAndNilEditKeepsSchedule() throws {
+        for mode in [WorkScheduleMode.fixedWindow, .flexibleDuration] {
+            let geofence = FakeGeofenceService()
+            let model = AppModel(inMemory: true, geofence: geofence, notifications: FakeNotificationService())
+            model.load()
+            let schedule = try XCTUnwrap(WorkScheduleSnapshot(
+                weekdaysMask: 62, startMinute: 540, endMinute: 1080, timeZoneIdentifier: "Asia/Shanghai",
+                isEnabled: false, calendarMode: .chinaStatutory, scheduleMode: mode,
+                standardWorkMinutes: 480, restMinutes: 180
+            ))
+            model.finishOnboarding(latitude: 31.2, longitude: 121.4, radius: 200, schedule: schedule)
+            let place = try XCTUnwrap(model.workTrigger)
+            XCTAssertEqual(place.workScheduleSnapshot, schedule)
+            XCTAssertTrue(model.updatePlace(triggerId: place.id, latitude: 31.3, longitude: 121.5,
+                                           radius: 200, placeName: "更新名称", placeType: .work, schedule: nil))
+            XCTAssertEqual(place.workScheduleSnapshot, schedule)
+            XCTAssertTrue(model.addWorkplace(latitude: 31.4, longitude: 121.6, radius: 200, placeName: "B", schedule: schedule))
+            let second = try XCTUnwrap(model.workTriggers.first { $0.id != place.id })
+            XCTAssertEqual(second.workScheduleSnapshot, schedule)
+            let enabled = try XCTUnwrap(WorkScheduleSnapshot(
+                weekdaysMask: 62, startMinute: 540, endMinute: 1080, timeZoneIdentifier: "Asia/Shanghai",
+                isEnabled: true, calendarMode: .chinaStatutory, scheduleMode: mode,
+                standardWorkMinutes: 480, restMinutes: 180
+            ))
+            XCTAssertTrue(model.updateWorkplace(triggerId: place.id, latitude: 31.3, longitude: 121.5,
+                                               radius: 200, placeName: "启用", schedule: enabled))
+            XCTAssertEqual(place.workScheduleSnapshot, enabled)
+            XCTAssertTrue(model.updateWorkplace(triggerId: place.id, latitude: 31.3, longitude: 121.5,
+                                               radius: 200, placeName: "禁用", schedule: schedule))
+            XCTAssertEqual(place.workScheduleSnapshot, schedule)
+            geofence.emit(.entered(triggerId: place.id, timestamp: Date()))
+            XCTAssertEqual(WorkScheduleSnapshot(metadata: try XCTUnwrap(model.events.first { $0.eventType == .geofenceEnter }).metadata), schedule)
+        }
     }
 
     func testOvertimeRecalculatesAfterSessionBoundaryCorrection() throws {
@@ -844,8 +1015,7 @@ final class RepositoryTests: XCTestCase {
         let model = AppModel(inMemory: true, geofence: geofence, notifications: FakeNotificationService())
         model.load()
         model.finishOnboarding(latitude: 31.2, longitude: 121.4, radius: 200,
-                               weekdaysMask: 0b1111111, normalStartMinute: 9 * 60,
-                               normalEndMinute: 18 * 60)
+                               schedule: legacySchedule(weekdaysMask: 0b1111111, startMinute: 9 * 60, endMinute: 18 * 60))
         let place = try XCTUnwrap(model.workTrigger)
         let day = Calendar.current.startOfDay(for: Date()).addingTimeInterval(-86_400)
         geofence.emit(.entered(triggerId: place.id, timestamp: day.addingTimeInterval(8 * 3_600)))
@@ -870,8 +1040,7 @@ final class RepositoryTests: XCTestCase {
         let model = AppModel(inMemory: true, geofence: geofence, notifications: FakeNotificationService())
         model.load()
         model.finishOnboarding(latitude: 31.2, longitude: 121.4, radius: 200,
-                               weekdaysMask: 0b1111111, normalStartMinute: 9 * 60,
-                               normalEndMinute: 18 * 60)
+                               schedule: legacySchedule(weekdaysMask: 0b1111111, startMinute: 9 * 60, endMinute: 18 * 60))
         let place = try XCTUnwrap(model.workTrigger)
         let day = Calendar.current.startOfDay(for: Date()).addingTimeInterval(-86_400)
         geofence.emit(.entered(triggerId: place.id, timestamp: day.addingTimeInterval(8 * 3_600)))
@@ -905,7 +1074,7 @@ final class RepositoryTests: XCTestCase {
         let model = AppModel(inMemory: true, geofence: geofence, notifications: FakeNotificationService())
         model.load()
         model.finishOnboarding(latitude: 31.2, longitude: 121.4, radius: 200,
-                               weekdaysMask: 0b1111111, normalStartMinute: nil, normalEndMinute: nil)
+                               schedule: legacySchedule(weekdaysMask: 0b1111111, startMinute: nil, endMinute: nil))
         model.addWorkplace(latitude: 31.3, longitude: 121.5, radius: 200,
                            placeName: "家", placeType: .home)
         let home = try XCTUnwrap(model.workTriggers.first { $0.placeType == .home })
@@ -931,7 +1100,7 @@ final class RepositoryTests: XCTestCase {
                              notifications: FakeNotificationService())
         model.load()
         model.finishOnboarding(latitude: 31.2, longitude: 121.4, radius: 200,
-                               weekdaysMask: 0b1111111, normalStartMinute: nil, normalEndMinute: nil,
+                               schedule: legacySchedule(weekdaysMask: 0b1111111, startMinute: nil, endMinute: nil),
                                placeName: "公司")
         let office = try XCTUnwrap(model.workTrigger)
         model.addWorkplace(latitude: 31.3, longitude: 121.5, radius: 200,
@@ -964,7 +1133,7 @@ final class RepositoryTests: XCTestCase {
                              notifications: FakeNotificationService())
         model.load()
         model.finishOnboarding(latitude: 31.2, longitude: 121.4, radius: 200,
-                               weekdaysMask: 0b1111111, normalStartMinute: nil, normalEndMinute: nil)
+                               schedule: legacySchedule(weekdaysMask: 0b1111111, startMinute: nil, endMinute: nil))
         model.addWorkplace(latitude: 31.3, longitude: 121.5, radius: 200,
                            placeName: "家", placeType: .home)
         let home = try XCTUnwrap(model.workTriggers.first { $0.placeType == .home })
@@ -998,7 +1167,7 @@ final class RepositoryTests: XCTestCase {
                              notifications: FakeNotificationService())
         model.load()
         model.finishOnboarding(latitude: 31.2, longitude: 121.4, radius: 200,
-                               weekdaysMask: 0b0111110, normalStartMinute: nil, normalEndMinute: nil)
+                               schedule: legacySchedule(weekdaysMask: 0b0111110, startMinute: nil, endMinute: nil))
         let triggerId = try XCTUnwrap(model.workTrigger?.id)
         let exit = Date().addingTimeInterval(-1800)
         geofence.emit(.exited(triggerId: triggerId, timestamp: exit))
@@ -1021,8 +1190,7 @@ final class RepositoryTests: XCTestCase {
                                  notifications: FakeNotificationService())
             model.load()
             model.finishOnboarding(latitude: 31.2, longitude: 121.4, radius: 200,
-                                   weekdaysMask: 0b0111110, normalStartMinute: 9 * 60,
-                                   normalEndMinute: 18 * 60)
+                                   schedule: legacySchedule(weekdaysMask: 0b0111110, startMinute: 9 * 60, endMinute: 18 * 60))
             let place = try XCTUnwrap(model.workTrigger)
             let exit = Date().addingTimeInterval(-1_800)
             geofence.emit(.exited(triggerId: place.id, timestamp: exit))
@@ -1034,7 +1202,7 @@ final class RepositoryTests: XCTestCase {
             XCTAssertTrue(model.updateWorkplace(
                 triggerId: place.id, latitude: place.latitude!, longitude: place.longitude!,
                 radius: place.radius!, placeName: place.displayPlaceName, placeType: .work,
-                weekdaysMask: 0b1111111, normalStartMinute: 22 * 60, normalEndMinute: 8 * 60,
+                schedule: legacySchedule(weekdaysMask: 0b1111111, startMinute: 22 * 60, endMinute: 8 * 60),
                 scheduleEditScope: scope
             ))
             XCTAssertEqual(repaired.startAt, repairedStart, "scope=\(scope)")
@@ -1049,7 +1217,7 @@ final class RepositoryTests: XCTestCase {
         let model = AppModel(inMemory: true, geofence: geofence, notifications: FakeNotificationService())
         model.load()
         model.finishOnboarding(latitude: 31.2, longitude: 121.4, radius: 200,
-                               weekdaysMask: 0b0111110, normalStartMinute: nil, normalEndMinute: nil,
+                               schedule: legacySchedule(weekdaysMask: 0b0111110, startMinute: nil, endMinute: nil),
                                placeName: "办公室")
         model.addWorkplace(
             latitude: 31.21, longitude: 121.41, radius: 150,
@@ -1067,7 +1235,7 @@ final class RepositoryTests: XCTestCase {
         let model = AppModel(inMemory: true, geofence: geofence, notifications: notifications)
         model.load()
         model.finishOnboarding(latitude: 31.2, longitude: 121.4, radius: 200,
-                               weekdaysMask: 0b0111110, normalStartMinute: nil, normalEndMinute: nil)
+                               schedule: legacySchedule(weekdaysMask: 0b0111110, startMinute: nil, endMinute: nil))
         await model.createReminder(name: "游泳", type: .exercise, time: Date(), weekdaysMask: 0b1111111)
         let exerciseId = try XCTUnwrap(model.reminders.first?.activityId)
 
@@ -1087,7 +1255,7 @@ final class RepositoryTests: XCTestCase {
         let model = AppModel(inMemory: true, geofence: geofence, notifications: FakeNotificationService())
         model.load()
         model.finishOnboarding(latitude: 31.2, longitude: 121.4, radius: 200,
-                               weekdaysMask: 0b0111110, normalStartMinute: nil, normalEndMinute: nil)
+                               schedule: legacySchedule(weekdaysMask: 0b0111110, startMinute: nil, endMinute: nil))
         let trigger = try XCTUnwrap(model.workTrigger)
 
         model.deleteWorkplace(trigger)
@@ -1102,7 +1270,7 @@ final class RepositoryTests: XCTestCase {
                              notifications: FakeNotificationService())
         model.load()
         model.finishOnboarding(latitude: 31.2, longitude: 121.4, radius: 200,
-                               weekdaysMask: 0b0111110, normalStartMinute: nil, normalEndMinute: nil)
+                               schedule: legacySchedule(weekdaysMask: 0b0111110, startMinute: nil, endMinute: nil))
         let triggerId = try XCTUnwrap(model.workTrigger?.id)
         geofence.emit(.exited(triggerId: triggerId, timestamp: Date()))
         let event = try XCTUnwrap(model.orphanedWorkExitEvents.first)
@@ -1120,7 +1288,7 @@ final class RepositoryTests: XCTestCase {
                              notifications: FakeNotificationService())
         model.load()
         model.finishOnboarding(latitude: 31.2, longitude: 121.4, radius: 200,
-                               weekdaysMask: 0b0111110, normalStartMinute: nil, normalEndMinute: nil)
+                               schedule: legacySchedule(weekdaysMask: 0b0111110, startMinute: nil, endMinute: nil))
         let triggerId = try XCTUnwrap(model.workTrigger?.id)
 
         geofence.emitState(triggerId: triggerId, state: .inside)
@@ -1136,7 +1304,7 @@ final class RepositoryTests: XCTestCase {
                              notifications: FakeNotificationService())
         model.load()
         model.finishOnboarding(latitude: 31.2, longitude: 121.4, radius: 200,
-                               weekdaysMask: 0b0111110, normalStartMinute: nil, normalEndMinute: nil,
+                               schedule: legacySchedule(weekdaysMask: 0b0111110, startMinute: nil, endMinute: nil),
                                placeName: "家")
         model.addWorkplace(latitude: 31.3, longitude: 121.5, radius: 200,
                            placeName: "公司", placeType: .work)
@@ -1162,7 +1330,7 @@ final class RepositoryTests: XCTestCase {
                              notifications: FakeNotificationService())
         model.load()
         model.finishOnboarding(latitude: 31.2, longitude: 121.4, radius: 200,
-                               weekdaysMask: 0b0111110, normalStartMinute: nil, normalEndMinute: nil)
+                               schedule: legacySchedule(weekdaysMask: 0b0111110, startMinute: nil, endMinute: nil))
         let triggerId = try XCTUnwrap(model.workTrigger?.id)
         let arrival = Date().addingTimeInterval(-3_600)
         let departure = Date().addingTimeInterval(-1_800)
@@ -1195,7 +1363,7 @@ final class RepositoryTests: XCTestCase {
                              notifications: FakeNotificationService())
         model.load()
         model.finishOnboarding(latitude: 31.2, longitude: 121.4, radius: 200,
-                               weekdaysMask: 0b0111110, normalStartMinute: 540, normalEndMinute: 1080)
+                               schedule: legacySchedule(weekdaysMask: 0b0111110, startMinute: 540, endMinute: 1080))
         let now = try XCTUnwrap(
             Calendar.current.date(from: DateComponents(year: 2026, month: 9, day: 4,
                                                        hour: 22, minute: 30))
@@ -1250,7 +1418,7 @@ final class RepositoryTests: XCTestCase {
         let model = AppModel(inMemory: true, geofence: geofence, notifications: notifications)
         model.load()
         model.finishOnboarding(latitude: 31.2, longitude: 121.4, radius: 200,
-                               weekdaysMask: 0b0111110, normalStartMinute: nil, normalEndMinute: nil)
+                               schedule: legacySchedule(weekdaysMask: 0b0111110, startMinute: nil, endMinute: nil))
         await model.createReminder(name: "英语", type: .study, time: Date(), weekdaysMask: 0b1111111)
         let reminder = try XCTUnwrap(model.reminders.first)
         notifications.emit(.start(definitionId: reminder.id, requestId: "test-start"))
@@ -1266,7 +1434,7 @@ final class RepositoryTests: XCTestCase {
         let notifications = FakeNotificationService()
         let model = AppModel(inMemory: true, geofence: geofence, notifications: notifications)
         model.finishOnboarding(latitude: 31.2, longitude: 121.4, radius: 200,
-                               weekdaysMask: 0b0111110, normalStartMinute: nil, normalEndMinute: nil)
+                               schedule: legacySchedule(weekdaysMask: 0b0111110, startMinute: nil, endMinute: nil))
         await model.createReminder(name: "冷启动提醒", type: .study, time: Date(), weekdaysMask: 0b1111111)
         let reminder = try XCTUnwrap(model.reminders.first)
 
@@ -1283,7 +1451,7 @@ final class RepositoryTests: XCTestCase {
         let model = AppModel(inMemory: true, geofence: FakeGeofenceService(), notifications: notifications)
         model.load()
         model.finishOnboarding(latitude: 31.2, longitude: 121.4, radius: 200,
-                               weekdaysMask: 0b0111110, normalStartMinute: nil, normalEndMinute: nil)
+                               schedule: legacySchedule(weekdaysMask: 0b0111110, startMinute: nil, endMinute: nil))
         await model.createReminder(name: "阅读", type: .study, time: Date(), weekdaysMask: 0b1111111)
         let reminder = try XCTUnwrap(model.reminders.first)
         notifications.emit(.snooze(definitionId: reminder.id, requestId: "test-snooze"))
@@ -1298,7 +1466,7 @@ final class RepositoryTests: XCTestCase {
         let model = AppModel(inMemory: true, geofence: FakeGeofenceService(), notifications: notifications)
         model.load()
         model.finishOnboarding(latitude: 31.2, longitude: 121.4, radius: 200,
-                               weekdaysMask: 0b0111110, normalStartMinute: nil, normalEndMinute: nil)
+                               schedule: legacySchedule(weekdaysMask: 0b0111110, startMinute: nil, endMinute: nil))
         await model.createReminder(name: "拉伸", type: .exercise, time: Date(), weekdaysMask: 0b1111111)
         let reminder = try XCTUnwrap(model.reminders.first)
 
@@ -1311,12 +1479,12 @@ final class RepositoryTests: XCTestCase {
         let model = AppModel(inMemory: true, geofence: FakeGeofenceService(), notifications: FakeNotificationService())
         model.load()
         model.finishOnboarding(latitude: 31.2, longitude: 121.4, radius: 200,
-                               weekdaysMask: 62, normalStartMinute: nil, normalEndMinute: nil)
+                               schedule: legacySchedule(weekdaysMask: 62, startMinute: nil, endMinute: nil))
         let workID = try XCTUnwrap(model.workActivity?.id)
         model.deleteWorkplace(try XCTUnwrap(model.workTrigger))
         XCTAssertTrue(model.isOnboarded)
         model.finishOnboarding(latitude: 31.3, longitude: 121.5, radius: 200,
-                               weekdaysMask: 62, normalStartMinute: nil, normalEndMinute: nil)
+                               schedule: legacySchedule(weekdaysMask: 62, startMinute: nil, endMinute: nil))
         XCTAssertEqual(model.workActivity?.id, workID)
         XCTAssertEqual(model.activities.filter { $0.type == .work }.count, 1)
         XCTAssertEqual(model.workTrigger?.activityId, workID)
@@ -1393,7 +1561,7 @@ final class RepositoryTests: XCTestCase {
         let model = AppModel(inMemory: true, geofence: geofence, notifications: FakeNotificationService())
         model.load()
         model.finishOnboarding(latitude: 31.2, longitude: 121.4, radius: 200,
-                               weekdaysMask: 0b1111111, normalStartMinute: nil, normalEndMinute: nil)
+                               schedule: legacySchedule(weekdaysMask: 0b1111111, startMinute: nil, endMinute: nil))
         model.addWorkplace(latitude: 31.3, longitude: 121.5, radius: 320, placeName: "家", placeType: .home)
         let home = try XCTUnwrap(model.workTriggers.first { $0.placeType == .home })
         let formatter = ISO8601DateFormatter()
@@ -1421,7 +1589,7 @@ final class RepositoryTests: XCTestCase {
         let model = AppModel(inMemory: true, geofence: geofence, notifications: FakeNotificationService())
         model.load()
         model.finishOnboarding(latitude: 31.2, longitude: 121.4, radius: 200,
-                               weekdaysMask: 0b1111111, normalStartMinute: nil, normalEndMinute: nil)
+                               schedule: legacySchedule(weekdaysMask: 0b1111111, startMinute: nil, endMinute: nil))
         let place = try XCTUnwrap(model.workTrigger)
         let start = Date().addingTimeInterval(-3600)
         geofence.emit(.entered(triggerId: place.id, timestamp: start))
@@ -1441,7 +1609,7 @@ final class RepositoryTests: XCTestCase {
                              notifications: FakeNotificationService())
         model.load()
         model.finishOnboarding(latitude: 31.2, longitude: 121.4, radius: 200,
-                               weekdaysMask: 0b0111110, normalStartMinute: nil, normalEndMinute: nil)
+                               schedule: legacySchedule(weekdaysMask: 0b0111110, startMinute: nil, endMinute: nil))
         let start = Date().addingTimeInterval(-7200)
         model.addManualSession(startAt: start, endAt: start.addingTimeInterval(3600))
         let session = try XCTUnwrap(model.sessions.first)

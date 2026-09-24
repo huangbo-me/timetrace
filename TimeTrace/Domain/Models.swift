@@ -239,8 +239,7 @@ extension ActivityTrigger {
             startMinute: normalStartMinute,
             endMinute: normalEndMinute,
             timeZoneIdentifier: timeZoneIdentifier,
-            isEnabled: workScheduleMode == .flexibleDuration ||
-                normalStartMinute != nil || normalEndMinute != nil,
+            isEnabled: workScheduleEnabledOverride ?? (normalStartMinute != nil || normalEndMinute != nil),
             calendarMode: workCalendarMode,
             scheduleMode: workScheduleMode,
             standardWorkMinutes: standardWorkMinutes,
@@ -333,6 +332,8 @@ final class ActivityTrigger {
     var workScheduleModeRaw: String = WorkScheduleMode.fixedWindow.rawValue
     var standardWorkMinutes: Int = 8 * 60
     var restMinutes: Int = 0
+    /// Nil preserves the time-field inference used by legacy stores and backups.
+    var workScheduleEnabledOverride: Bool?
     var createdAt: Date = Date()
     var updatedAt: Date = Date()
 

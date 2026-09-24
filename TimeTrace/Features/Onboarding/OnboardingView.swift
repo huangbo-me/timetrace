@@ -156,13 +156,19 @@ struct OnboardingView: View {
 
                 Section {
                     Button("完成配置") {
+                        guard let schedule = WorkScheduleSnapshot(
+                            weekdaysMask: weekdaysMask,
+                            startMinute: useNormalHours ? minuteOfDay(normalStart) : nil,
+                            endMinute: useNormalHours ? minuteOfDay(normalEnd) : nil,
+                            timeZoneIdentifier: TimeZone.current.identifier,
+                            isEnabled: useNormalHours,
+                            calendarMode: .chinaStatutory
+                        ) else { return }
                         model.finishOnboarding(
                             latitude: coordinate.latitude,
                             longitude: coordinate.longitude,
                             radius: radius,
-                            weekdaysMask: weekdaysMask,
-                            normalStartMinute: useNormalHours ? minuteOfDay(normalStart) : nil,
-                            normalEndMinute: useNormalHours ? minuteOfDay(normalEnd) : nil,
+                            schedule: schedule,
                             placeName: placeName
                         )
                     }

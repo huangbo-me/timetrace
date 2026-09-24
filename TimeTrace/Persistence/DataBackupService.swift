@@ -71,6 +71,7 @@ struct ActivityTriggerRecord: Codable, Sendable {
     var workScheduleModeRaw: String?
     var standardWorkMinutes: Int?
     var restMinutes: Int?
+    var workScheduleEnabledOverride: Bool?
     var createdAt: Date
     var updatedAt: Date
 
@@ -96,6 +97,7 @@ struct ActivityTriggerRecord: Codable, Sendable {
         workScheduleModeRaw = model.workScheduleModeRaw
         standardWorkMinutes = model.standardWorkMinutes
         restMinutes = model.restMinutes
+        workScheduleEnabledOverride = model.workScheduleEnabledOverride
         createdAt = model.createdAt
         updatedAt = model.updatedAt
     }
@@ -126,6 +128,7 @@ struct ActivityTriggerRecord: Codable, Sendable {
         model.normalStartMinute = normalStartMinute
         model.normalEndMinute = normalEndMinute
         model.timeZoneIdentifier = timeZoneIdentifier
+        model.workScheduleEnabledOverride = workScheduleEnabledOverride
         model.createdAt = createdAt
         model.updatedAt = updatedAt
         return model

@@ -335,6 +335,7 @@ final class AnalyticsServiceTests: XCTestCase {
             restMinutes: 3 * 60
         )
 
+        trigger.workScheduleEnabledOverride = true
         let snapshot = try XCTUnwrap(trigger.workScheduleSnapshot)
         XCTAssertTrue(snapshot.isEnabled)
         XCTAssertEqual(snapshot.scheduleMode, .flexibleDuration)

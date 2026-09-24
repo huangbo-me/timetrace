@@ -752,9 +752,7 @@ struct WorkplaceEditorView: View {
                 placeName: placeName,
                 placeType: placeType,
                 isEnabled: placeEnabled,
-                weekdaysMask: schedule?.weekdaysMask,
-                normalStartMinute: schedule?.startMinute,
-                normalEndMinute: schedule?.endMinute,
+                schedule: schedule,
                 scheduleEditScope: scope
             )
         } else {
