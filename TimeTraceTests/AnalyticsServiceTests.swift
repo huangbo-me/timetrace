@@ -358,6 +358,117 @@ final class AnalyticsServiceTests: XCTestCase {
         XCTAssertEqual(result.totalOvertime, 7.5 * 3600, accuracy: 0.1)
     }
 
+    func testStatutoryHolidayCountsEntirePresenceAsRestDayOvertime() throws {
+        let schedule = try XCTUnwrap(statutoryFixedSchedule(restMinutes: 180))
+        let start = localDate(year: 2026, month: 9, day: 25, hour: 10)
+        let end = localDate(year: 2026, month: 9, day: 25, hour: 21)
+        let result = try XCTUnwrap(WorkScheduleCalculator.breakdown(
+            from: start, to: end, schedule: schedule
+        ))
+        XCTAssertEqual(result.restDayOvertime, 11 * 3600, accuracy: 0.1)
+        XCTAssertEqual(result.normalDuration, 0, accuracy: 0.1)
+    }
+
+    func testMakeUpWeekendUsesNormalWorkdayRules() throws {
+        let schedule = try XCTUnwrap(statutoryFixedSchedule(restMinutes: 60))
+        let start = localDate(year: 2026, month: 9, day: 20, hour: 9)
+        let end = localDate(year: 2026, month: 9, day: 20, hour: 18)
+        let result = try XCTUnwrap(WorkScheduleCalculator.breakdown(
+            from: start, to: end, schedule: schedule
+        ))
+        XCTAssertEqual(result.normalDuration, 8 * 3600, accuracy: 0.1)
+        XCTAssertEqual(result.totalOvertime, 0, accuracy: 0.1)
+    }
+
+    func testFlexibleWorkdaySubtractsRestBeforeOvertime() throws {
+        let schedule = try XCTUnwrap(statutoryFlexibleSchedule(
+            standardMinutes: 480, restMinutes: 180
+        ))
+        let result = try XCTUnwrap(WorkScheduleCalculator.breakdown(
+            from: localDate(year: 2026, month: 9, day: 21, hour: 10),
+            to: localDate(year: 2026, month: 9, day: 21, hour: 21),
+            schedule: schedule
+        ))
+        XCTAssertEqual(result.normalDuration, 8 * 3600, accuracy: 0.1)
+        XCTAssertEqual(result.workdayOvertime, 0, accuracy: 0.1)
+    }
+
+    func testFlexibleRestDayDoesNotSubtractRest() throws {
+        let schedule = try XCTUnwrap(statutoryFlexibleSchedule(
+            standardMinutes: 480, restMinutes: 180
+        ))
+        let result = try XCTUnwrap(WorkScheduleCalculator.breakdown(
+            from: localDate(year: 2026, month: 9, day: 26, hour: 10),
+            to: localDate(year: 2026, month: 9, day: 26, hour: 21),
+            schedule: schedule
+        ))
+        XCTAssertEqual(result.restDayOvertime, 11 * 3600, accuracy: 0.1)
+    }
+
+    func testFixedNightShiftUsesStartDayAndSubtractsRestOnce() throws {
+        let schedule = try XCTUnwrap(WorkScheduleSnapshot(
+            weekdaysMask: 0b1111111, startMinute: 22 * 60, endMinute: 8 * 60,
+            timeZoneIdentifier: "Asia/Shanghai", isEnabled: true,
+            calendarMode: .chinaStatutory, scheduleMode: .fixedWindow,
+            standardWorkMinutes: 480, restMinutes: 60
+        ))
+        let result = try XCTUnwrap(WorkScheduleCalculator.breakdown(
+            from: localDate(year: 2026, month: 9, day: 24, hour: 21),
+            to: localDate(year: 2026, month: 9, day: 25, hour: 10),
+            schedule: schedule
+        ))
+        XCTAssertEqual(result.earlyOvertime, 1 * 3600, accuracy: 0.1)
+        XCTAssertEqual(result.normalDuration, 9 * 3600, accuracy: 0.1)
+        XCTAssertEqual(result.restDayOvertime, 2 * 3600, accuracy: 0.1)
+        XCTAssertEqual(result.totalOvertime, 3 * 3600, accuracy: 0.1)
+    }
+
+    func testRestDayStartedNightShiftIsEntirelyRestDayOvertime() throws {
+        let schedule = try XCTUnwrap(WorkScheduleSnapshot(
+            weekdaysMask: 0b1111111, startMinute: 22 * 60, endMinute: 8 * 60,
+            timeZoneIdentifier: "Asia/Shanghai", isEnabled: true,
+            calendarMode: .chinaStatutory, scheduleMode: .fixedWindow,
+            standardWorkMinutes: 480, restMinutes: 60
+        ))
+        let result = try XCTUnwrap(WorkScheduleCalculator.breakdown(
+            from: localDate(year: 2026, month: 9, day: 25, hour: 22),
+            to: localDate(year: 2026, month: 9, day: 26, hour: 8),
+            schedule: schedule
+        ))
+        XCTAssertEqual(result.normalDuration, 0, accuracy: 0.1)
+        XCTAssertEqual(result.restDayOvertime, 10 * 3600, accuracy: 0.1)
+    }
+
+    func testFlexibleFridayToSundayAppliesEachDaysOwnRules() throws {
+        let schedule = try XCTUnwrap(statutoryFlexibleSchedule(
+            standardMinutes: 480, restMinutes: 180
+        ))
+        let result = try XCTUnwrap(WorkScheduleCalculator.breakdown(
+            from: localDate(year: 2026, month: 9, day: 18, hour: 10),
+            to: localDate(year: 2026, month: 9, day: 20, hour: 21),
+            schedule: schedule
+        ))
+        XCTAssertEqual(result.normalDuration, 16 * 3600, accuracy: 0.1)
+        XCTAssertEqual(result.workdayOvertime, 13 * 3600, accuracy: 0.1)
+        XCTAssertEqual(result.restDayOvertime, 24 * 3600, accuracy: 0.1)
+        XCTAssertEqual(result.totalOvertime, 37 * 3600, accuracy: 0.1)
+    }
+
+    func testLegacyCustomWeekdayIgnoresStatutoryHolidayTable() throws {
+        let fridayOnly = 1 << (6 - 1)
+        let schedule = try XCTUnwrap(WorkScheduleSnapshot(
+            weekdaysMask: fridayOnly, startMinute: 9 * 60, endMinute: 18 * 60,
+            timeZoneIdentifier: "Asia/Shanghai", isEnabled: true
+        ))
+        let result = try XCTUnwrap(WorkScheduleCalculator.breakdown(
+            from: localDate(year: 2026, month: 9, day: 25, hour: 9),
+            to: localDate(year: 2026, month: 9, day: 25, hour: 18),
+            schedule: schedule
+        ))
+        XCTAssertEqual(result.normalDuration, 9 * 3600, accuracy: 0.1)
+        XCTAssertEqual(result.totalOvertime, 0, accuracy: 0.1)
+    }
+
     func testMultiDayScheduleRepeatsWithoutDoubleCounting() throws {
         let schedule = try XCTUnwrap(WorkScheduleSnapshot(
             weekdaysMask: 0b1111111, startMinute: 9 * 60, endMinute: 17 * 60,
@@ -563,12 +674,31 @@ final class AnalyticsServiceTests: XCTestCase {
     }
 
     private func localDate(year: Int, month: Int, day: Int, hour: Int,
-                           timeZoneIdentifier: String) -> Date {
+                           timeZoneIdentifier: String = "Asia/Shanghai") -> Date {
         var localCalendar = Calendar(identifier: .gregorian)
         localCalendar.timeZone = TimeZone(identifier: timeZoneIdentifier)!
         return localCalendar.date(from: DateComponents(
             year: year, month: month, day: day, hour: hour
         ))!
+    }
+
+    private func statutoryFixedSchedule(restMinutes: Int) -> WorkScheduleSnapshot? {
+        WorkScheduleSnapshot(
+            weekdaysMask: 0b1111111, startMinute: 9 * 60, endMinute: 18 * 60,
+            timeZoneIdentifier: "Asia/Shanghai", isEnabled: true,
+            calendarMode: .chinaStatutory, scheduleMode: .fixedWindow,
+            standardWorkMinutes: 480, restMinutes: restMinutes
+        )
+    }
+
+    private func statutoryFlexibleSchedule(standardMinutes: Int,
+                                           restMinutes: Int) -> WorkScheduleSnapshot? {
+        WorkScheduleSnapshot(
+            weekdaysMask: 0b1111111, startMinute: nil, endMinute: nil,
+            timeZoneIdentifier: "Asia/Shanghai", isEnabled: true,
+            calendarMode: .chinaStatutory, scheduleMode: .flexibleDuration,
+            standardWorkMinutes: standardMinutes, restMinutes: restMinutes
+        )
     }
 }
 
