@@ -1,0 +1,4 @@
+{
+  "name": "TimeTrace release tooling",
+  "install": "sudo apt-get update && sudo apt-get install -y ruby ruby-minitest"
+}
