@@ -76,6 +76,34 @@ final class AnalyticsServiceTests: XCTestCase {
     }
 
     @MainActor
+    func testHistoryDayCardOnlyExposesDailyTotalOvertimeText() {
+        let first = ActivitySession(activityId: activityId, startAt: date(day: 1, hour: 8),
+                                    endAt: date(day: 1, hour: 18))
+        let second = ActivitySession(activityId: activityId, startAt: date(day: 1, hour: 19),
+                                     endAt: date(day: 1, hour: 22))
+        let summary = DailyActivitySummary(
+            date: date(day: 1, hour: 0), firstArrivalTime: first.startAt,
+            lastDepartureTime: second.endAt, totalDuration: 13 * 3600,
+            sessionCount: 2, isIncomplete: false, sessions: [first, second]
+        )
+        let card = HistoryDayCard(
+            summary: summary, durationTier: .long, origins: [:],
+            overtime: [
+                first.id: OvertimeBreakdown(normalDuration: 8 * 3600, earlyOvertime: 0,
+                                             lateOvertime: 0, workdayOvertime: 2 * 3600,
+                                             restDayOvertime: 0),
+                second.id: OvertimeBreakdown(normalDuration: 0, earlyOvertime: 0,
+                                              lateOvertime: 0, workdayOvertime: 0,
+                                              restDayOvertime: 3 * 3600)
+            ],
+            crossedDays: [:]
+        )
+
+        XCTAssertEqual(card.visibleOvertimeTexts, ["加班 5小时 0分钟"],
+                       "The history card must show one daily total, not overtime categories or per-session totals")
+    }
+
+    @MainActor
     func testHistoryDayCardKeepsUnknownBreakdownOutOfCompleteTotal() {
         let knownSession = ActivitySession(activityId: activityId, startAt: date(day: 1, hour: 8),
                                            endAt: date(day: 1, hour: 18))
@@ -94,6 +122,8 @@ final class AnalyticsServiceTests: XCTestCase {
         XCTAssertNil(card.overtimePresentation.completeTotals)
         XCTAssertNil(card.overtimePresentation.totalOvertimeText,
                      "A card must not label the known partial sum as total overtime")
+        XCTAssertTrue(card.visibleOvertimeTexts.isEmpty,
+                      "An incomplete daily total must not be replaced by known category subtotals on the card")
         XCTAssertEqual(card.overtimePresentation.workdayOvertimeText,
                        "工作日加班 \(TimeTraceFormat.duration(2 * 3600))")
     }

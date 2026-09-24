@@ -638,8 +638,11 @@ struct HistoryDayCard: View {
         HistoryOvertimePresentation(summary.sessions.map { overtime[$0.id] })
     }
 
+    var visibleOvertimeTexts: [String] {
+        overtimePresentation.totalOvertimeText.map { [$0] } ?? []
+    }
+
     var body: some View {
-        let presentation = overtimePresentation
         VStack(alignment: .leading, spacing: 14) {
             HStack(alignment: .top, spacing: 8) {
                 Text(TimeTraceFormat.day.string(from: summary.date))
@@ -670,13 +673,8 @@ struct HistoryDayCard: View {
                 Text("\(summary.sessionCount) 个记录时段 · \(durationTier.label)")
                     .font(.caption)
                     .foregroundStyle(.secondary)
-                if let totalText = presentation.totalOvertimeText {
-                    Text(totalText)
-                        .font(.caption.weight(.semibold))
-                        .foregroundStyle(design.violet)
-                }
-                if let workdayText = presentation.workdayOvertimeText {
-                    Text(workdayText)
+                ForEach(visibleOvertimeTexts, id: \.self) { text in
+                    Text(text)
                         .font(.caption.weight(.semibold))
                         .foregroundStyle(design.violet)
                 }
@@ -688,7 +686,6 @@ struct HistoryDayCard: View {
                         session: session,
                         tint: tint,
                         origin: origins[session.id] ?? .system,
-                        overtime: overtime[session.id],
                         crossedDays: crossedDays[session.id] ?? 0
                     )
                 }
@@ -877,7 +874,6 @@ private struct HistorySessionItem: View {
     let session: ActivitySession
     let tint: Color
     let origin: HistoryRecordOrigin
-    let overtime: OvertimeBreakdown?
     let crossedDays: Int
 
     var body: some View {
@@ -898,20 +894,12 @@ private struct HistorySessionItem: View {
                     .foregroundStyle(.secondary)
                 HistoryOriginBadge(origin: origin)
             }
-            if crossedDays > 0 || (overtime?.totalOvertime ?? 0) > 0 {
+            if crossedDays > 0 {
                 HStack(spacing: 8) {
-                    if crossedDays > 0 { Text("跨 \(crossedDays) 天") }
-                    if let overtime, overtime.totalOvertime > 0 {
-                        Text("加班 \(TimeTraceFormat.duration(overtime.totalOvertime))")
-                    }
+                    Text("跨 \(crossedDays) 天")
                 }
                 .font(.caption2.weight(.semibold))
                 .foregroundStyle(tint)
-            }
-            if let overtime, let workdayText = HistoryOvertimePresentation([overtime]).workdayOvertimeText {
-                Text(workdayText)
-                    .font(.caption2.weight(.semibold))
-                    .foregroundStyle(tint)
             }
         }
         .frame(maxWidth: .infinity, alignment: .leading)
