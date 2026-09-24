@@ -18,6 +18,51 @@ private final class NotificationFixtureCoder: NSCoder {
 
 @MainActor
 final class RepositoryTests: XCTestCase {
+    func testWorkScheduleImpactPromptShowsStableCount() {
+        let prompt = WorkScheduleImpactPrompt(affectedCount: 16)
+        XCTAssertEqual(prompt.title, "排班变更应用范围")
+        XCTAssertTrue(prompt.message.contains("当前地点共有 16 条未删除记录"))
+        XCTAssertTrue(prompt.message.contains("已有 16 条记录保持原排班"))
+        XCTAssertEqual(prompt.allHistoryButtonTitle, "全部历史（16 条）")
+    }
+
+    func testWorkScheduleEditorDefaultsAndDurationLabels() throws {
+        let schedule = try XCTUnwrap(WorkScheduleEditorState().snapshot)
+        XCTAssertEqual(schedule.calendarMode, .chinaStatutory)
+        XCTAssertEqual(schedule.scheduleMode, .fixedWindow)
+        XCTAssertEqual(schedule.startMinute, 540)
+        XCTAssertEqual(schedule.endMinute, 1080)
+        XCTAssertEqual(schedule.standardWorkMinutes, 480)
+        XCTAssertEqual(schedule.restMinutes, 0)
+        XCTAssertTrue(schedule.isEnabled)
+        XCTAssertEqual(WorkScheduleEditorState.durationTitle(0), "无休息")
+        XCTAssertEqual(WorkScheduleEditorState.durationTitle(30), "0.5 小时")
+        XCTAssertEqual(WorkScheduleEditorState.durationTitle(180), "3 小时")
+        XCTAssertEqual(WorkScheduleEditorState.durationTitle(210), "3.5 小时")
+    }
+
+    func testWorkScheduleEditorPreservesCompleteDisabledTriggerAndNilWindow() throws {
+        let trigger = ActivityTrigger(
+            activityId: UUID(), type: .geofence, weekdaysMask: 0b1010100,
+            normalStartMinute: 1200, normalEndMinute: 300,
+            timeZoneIdentifier: "Asia/Shanghai", workCalendarMode: .customWeekdays,
+            workScheduleMode: .flexibleDuration, standardWorkMinutes: 450, restMinutes: 180
+        )
+        trigger.workScheduleEnabledOverride = false
+        var editor = WorkScheduleEditorState(trigger: trigger)
+        XCTAssertEqual(try XCTUnwrap(editor.snapshot), try XCTUnwrap(trigger.workScheduleSnapshot))
+        editor.isEnabled = true
+        XCTAssertEqual(editor.snapshot?.restMinutes, 180)
+        editor.isEnabled = false
+        XCTAssertEqual(editor.snapshot, trigger.workScheduleSnapshot)
+
+        trigger.normalStartMinute = nil
+        trigger.normalEndMinute = nil
+        trigger.workScheduleMode = .fixedWindow
+        editor = WorkScheduleEditorState(trigger: trigger)
+        XCTAssertEqual(try XCTUnwrap(editor.snapshot), try XCTUnwrap(trigger.workScheduleSnapshot))
+    }
+
     private func legacySchedule(weekdaysMask: Int, startMinute: Int?, endMinute: Int?) -> WorkScheduleSnapshot {
         WorkScheduleSnapshot(weekdaysMask: weekdaysMask, startMinute: startMinute, endMinute: endMinute,
                              timeZoneIdentifier: TimeZone.current.identifier,

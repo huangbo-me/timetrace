@@ -154,14 +154,14 @@ struct WorkScheduleSnapshot: Codable, Equatable {
         guard let timeZone = TimeZone(identifier: timeZoneIdentifier) else { return nil }
         guard Self.isValidStandardWorkMinutes(standardWorkMinutes),
               Self.isValidRestMinutes(restMinutes) else { return nil }
+        if isEnabled && calendarMode == .customWeekdays {
+            guard boundedMask != 0 else { return nil }
+        }
         if isEnabled && scheduleMode == .fixedWindow {
-            guard boundedMask != 0,
-                  let startMinute, let endMinute,
+            guard let startMinute, let endMinute,
                   (0..<1_440).contains(startMinute),
                   (0..<1_440).contains(endMinute),
                   startMinute != endMinute else { return nil }
-        } else if isEnabled {
-            guard boundedMask != 0 else { return nil }
         }
         self.weekdaysMask = boundedMask
         self.startMinute = startMinute

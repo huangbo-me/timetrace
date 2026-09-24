@@ -536,6 +536,17 @@ private struct AboutView: View {
     }
 }
 
+struct WorkScheduleImpactPrompt: Equatable {
+    let affectedCount: Int
+    let title = "排班变更应用范围"
+    var allHistoryButtonTitle: String { "全部历史（\(affectedCount) 条）" }
+    var message: String {
+        "当前地点共有 \(affectedCount) 条未删除记录。\n" +
+        "仅今后：已有 \(affectedCount) 条记录保持原排班，下次到达时生效。\n" +
+        "全部历史：按新排班重新计算 \(affectedCount) 条记录，包含进行中的记录。"
+    }
+}
+
 struct WorkplaceEditorView: View {
     @Environment(\.timeTraceDesign) private var design
 
@@ -548,14 +559,12 @@ struct WorkplaceEditorView: View {
     @State private var placeName = ""
     @State private var placeType: PlaceType = .work
     @State private var placeEnabled = true
-    @State private var weekdaysMask: Int
-    @State private var useNormalHours: Bool
-    @State private var normalStart: Date
-    @State private var normalEnd: Date
+    @State private var schedule: WorkScheduleEditorState
     @State private var locationAccuracy: CLLocationAccuracy?
     @State private var usesReducedAccuracy = false
     @State private var showingDeleteConfirmation = false
     @State private var showingScheduleScopeConfirmation = false
+    @State private var scheduleImpactPrompt: WorkScheduleImpactPrompt?
     let trigger: ActivityTrigger?
 
     private var model: AppModel { store.application }
@@ -569,10 +578,7 @@ struct WorkplaceEditorView: View {
             distance: 1_500
         )))
         _radius = State(initialValue: 200)
-        _weekdaysMask = State(initialValue: trigger?.weekdaysMask ?? 0b0111110)
-        _useNormalHours = State(initialValue: trigger?.normalStartMinute != nil && trigger?.normalEndMinute != nil)
-        _normalStart = State(initialValue: Self.date(for: trigger?.normalStartMinute ?? 9 * 60))
-        _normalEnd = State(initialValue: Self.date(for: trigger?.normalEndMinute ?? 18 * 60))
+        _schedule = State(initialValue: WorkScheduleEditorState(trigger: trigger))
     }
 
     var body: some View {
@@ -595,22 +601,7 @@ struct WorkplaceEditorView: View {
                     }
                 }
                 if placeType == .work {
-                    Section {
-                        WeekdayPicker(mask: $weekdaysMask)
-                        Toggle("设置正常工作时间", isOn: $useNormalHours)
-                        if useNormalHours {
-                            DatePicker("上班", selection: $normalStart, displayedComponents: .hourAndMinute)
-                            DatePicker("下班", selection: $normalEnd, displayedComponents: .hourAndMinute)
-                            if minuteOfDay(normalStart) == minuteOfDay(normalEnd) {
-                                Text("上班时间和下班时间不能相同。")
-                                    .font(.caption).foregroundStyle(.red)
-                            }
-                        }
-                    } header: {
-                        Text("常规安排")
-                    } footer: {
-                        Text("用于计算正常工时和加班。结束时间早于开始时间时，视为次日下班。")
-                    }
+                    WorkScheduleEditorSection(schedule: $schedule)
                 }
                 Section("定位地点") {
                     Button {
@@ -670,11 +661,6 @@ struct WorkplaceEditorView: View {
                     placeName = trigger.displayPlaceName
                     placeType = trigger.placeType
                     placeEnabled = trigger.isEnabled
-                } else if let schedule = model.workTriggers.first(where: { $0.placeType == .work })?.workScheduleSnapshot {
-                    weekdaysMask = schedule.weekdaysMask
-                    useNormalHours = schedule.isEnabled
-                    if let start = schedule.startMinute { normalStart = Self.date(for: start) }
-                    if let end = schedule.endMinute { normalEnd = Self.date(for: end) }
                 }
             }
             .toolbar {
@@ -703,37 +689,33 @@ struct WorkplaceEditorView: View {
             } message: {
                 Text("将停止监测并删除“\(trigger?.displayPlaceName ?? "")”。")
             }
-            .confirmationDialog("排班变更应用到哪些记录？",
-                                isPresented: $showingScheduleScopeConfirmation,
-                                titleVisibility: .visible) {
+            .alert(scheduleImpactPrompt?.title ?? "排班变更应用范围",
+                   isPresented: $showingScheduleScopeConfirmation,
+                   presenting: scheduleImpactPrompt) { prompt in
                 Button("仅今后") { save(scope: .futureOnly) }
-                Button("全部历史") { save(scope: .allHistory) }
+                Button(prompt.allHistoryButtonTitle) { save(scope: .allHistory) }
                 Button("取消", role: .cancel) {}
-            } message: {
-                Text("“仅今后”保留历史和当前进行中记录的原排班；“全部历史”会按新排班重新计算这个地点的记录。")
+            } message: { prompt in
+                Text(prompt.message)
             }
         }
     }
 
     private var isScheduleValid: Bool {
-        guard placeType == .work, useNormalHours else { return true }
-        return weekdaysMask & 0b1111111 != 0 && minuteOfDay(normalStart) != minuteOfDay(normalEnd)
+        placeType != .work || editedSchedule != nil
     }
 
     private var editedSchedule: WorkScheduleSnapshot? {
         guard placeType == .work else { return nil }
-        return WorkScheduleSnapshot(
-            weekdaysMask: weekdaysMask,
-            startMinute: useNormalHours ? minuteOfDay(normalStart) : nil,
-            endMinute: useNormalHours ? minuteOfDay(normalEnd) : nil,
-            timeZoneIdentifier: trigger?.timeZoneIdentifier ?? TimeZone.current.identifier,
-            isEnabled: useNormalHours
-        )
+        return schedule.snapshot
     }
 
     private func requestSave() {
         guard isScheduleValid else { return }
         if let trigger, placeType == .work, editedSchedule != trigger.workScheduleSnapshot {
+            scheduleImpactPrompt = WorkScheduleImpactPrompt(
+                affectedCount: model.workScheduleAffectedSessionCount(triggerId: trigger.id)
+            )
             showingScheduleScopeConfirmation = true
         } else {
             save(scope: .futureOnly)
@@ -766,15 +748,6 @@ struct WorkplaceEditorView: View {
             )
         }
         if saved { dismiss() }
-    }
-
-    private func minuteOfDay(_ date: Date) -> Int {
-        let parts = Calendar.current.dateComponents([.hour, .minute], from: date)
-        return (parts.hour ?? 0) * 60 + (parts.minute ?? 0)
-    }
-
-    private static func date(for minute: Int) -> Date {
-        Calendar.current.date(from: DateComponents(hour: minute / 60, minute: minute % 60)) ?? Date()
     }
 
     private func useCurrentLocationAsPlace() async {

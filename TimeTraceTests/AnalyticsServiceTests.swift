@@ -8,6 +8,22 @@ final class AnalyticsServiceTests: XCTestCase {
     private let activityId = UUID()
     private var calendar = utcCalendar()
 
+    func testStatutorySchedulesAcceptEmptyWeekdaysWhileCustomSchedulesRequireSelection() throws {
+        for mode in WorkScheduleMode.allCases {
+            let statutory = WorkScheduleSnapshot(
+                weekdaysMask: 0, startMinute: 540, endMinute: 1080,
+                timeZoneIdentifier: "Asia/Shanghai", isEnabled: true,
+                calendarMode: .chinaStatutory, scheduleMode: mode
+            )
+            XCTAssertEqual(try XCTUnwrap(statutory).weekdaysMask, 0)
+            XCTAssertNil(WorkScheduleSnapshot(
+                weekdaysMask: 0, startMinute: 540, endMinute: 1080,
+                timeZoneIdentifier: "Asia/Shanghai", isEnabled: true,
+                calendarMode: .customWeekdays, scheduleMode: mode
+            ))
+        }
+    }
+
     func testDailySummarySumsSessionsRatherThanSpan() {
         let values = [session(day: 1, start: 9, end: 12), session(day: 1, start: 13, end: 19)]
         let result = service.dailySummaries(sessions: values, activityId: activityId,

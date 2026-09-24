@@ -51,6 +51,134 @@ enum WorkplaceInputField: Hashable {
     case addressQuery
 }
 
+/// Preserve hidden and disabled values so editing only a place does not change its schedule.
+struct WorkScheduleEditorState {
+    var weekdaysMask = 0b0111110
+    var isEnabled = true
+    var calendarMode: WorkCalendarMode = .chinaStatutory
+    var scheduleMode: WorkScheduleMode = .fixedWindow
+    var standardWorkMinutes = 480
+    var restMinutes = 0
+    var startMinute: Int? = 540
+    var endMinute: Int? = 1080
+    var timeZoneIdentifier = TimeZone.current.identifier
+
+    init(trigger: ActivityTrigger? = nil) {
+        guard let trigger else { return }
+        weekdaysMask = trigger.weekdaysMask
+        isEnabled = trigger.workScheduleEnabledOverride ??
+            (trigger.normalStartMinute != nil || trigger.normalEndMinute != nil)
+        calendarMode = trigger.workCalendarMode
+        scheduleMode = trigger.workScheduleMode
+        standardWorkMinutes = trigger.standardWorkMinutes
+        restMinutes = trigger.restMinutes
+        startMinute = trigger.normalStartMinute
+        endMinute = trigger.normalEndMinute
+        timeZoneIdentifier = trigger.timeZoneIdentifier
+    }
+
+    var snapshot: WorkScheduleSnapshot? {
+        WorkScheduleSnapshot(
+            weekdaysMask: weekdaysMask, startMinute: startMinute, endMinute: endMinute,
+            timeZoneIdentifier: timeZoneIdentifier, isEnabled: isEnabled,
+            calendarMode: calendarMode, scheduleMode: scheduleMode,
+            standardWorkMinutes: standardWorkMinutes, restMinutes: restMinutes
+        )
+    }
+
+    static func durationTitle(_ minutes: Int) -> String {
+        guard minutes != 0 else { return "无休息" }
+        return "\(minutes / 60)\(minutes % 60 == 0 ? "" : ".5") 小时"
+    }
+}
+
+struct WorkScheduleEditorSection: View {
+    @Binding var schedule: WorkScheduleEditorState
+
+    var body: some View {
+        Section {
+            Toggle("设置正常工作时间", isOn: $schedule.isEnabled)
+            if schedule.isEnabled {
+                Picker("工作日规则", selection: $schedule.calendarMode) {
+                    Text("中国大陆法定工作日").tag(WorkCalendarMode.chinaStatutory)
+                    Text("自定义每周工作日").tag(WorkCalendarMode.customWeekdays)
+                }
+                if schedule.calendarMode == .customWeekdays {
+                    VStack(alignment: .leading, spacing: 8) {
+                        Text("选择通常需要上班的星期")
+                            .font(.caption).foregroundStyle(.secondary)
+                        WeekdayPicker(mask: $schedule.weekdaysMask)
+                    }
+                    if schedule.weekdaysMask & 0b1111111 == 0 {
+                        Text("请至少选择一个通常需要上班的星期。")
+                            .font(.caption).foregroundStyle(.red)
+                    }
+                }
+                Picker("工时模式", selection: $schedule.scheduleMode) {
+                    Text("固定上下班").tag(WorkScheduleMode.fixedWindow)
+                    Text("弹性工时").tag(WorkScheduleMode.flexibleDuration)
+                }
+                .pickerStyle(.segmented)
+                if schedule.scheduleMode == .fixedWindow {
+                    DatePicker("上班", selection: timeBinding(\.startMinute, fallback: 540), displayedComponents: .hourAndMinute)
+                    DatePicker("下班", selection: timeBinding(\.endMinute, fallback: 1080), displayedComponents: .hourAndMinute)
+                    if schedule.startMinute == schedule.endMinute {
+                        Text("上班时间和下班时间不能相同。")
+                            .font(.caption).foregroundStyle(.red)
+                    }
+                } else {
+                    Picker("每日标准工时", selection: $schedule.standardWorkMinutes) {
+                        ForEach(Array(stride(from: 30, through: 960, by: 30)), id: \.self) { minutes in
+                            Text(WorkScheduleEditorState.durationTitle(minutes)).tag(minutes)
+                        }
+                    }
+                }
+                Picker("休息时长", selection: $schedule.restMinutes) {
+                    ForEach(Array(stride(from: 0, through: 720, by: 30)), id: \.self) { minutes in
+                        Text(WorkScheduleEditorState.durationTitle(minutes)).tag(minutes)
+                    }
+                }
+            }
+        } header: {
+            Text("常规安排")
+        } footer: {
+            VStack(alignment: .leading, spacing: 4) {
+                Text("用于计算正常工时和加班；休息日也会持续记录地点进出。")
+                if schedule.isEnabled {
+                    if schedule.scheduleMode == .fixedWindow {
+                        Text("结束时间早于开始时间时，视为次日下班；每班次从正常工时中扣除一次休息。")
+                    } else {
+                        Text("按自然日计算有效工时，扣除休息后超出每日标准工时的部分计为工作日加班。")
+                    }
+                    Text("休息日不扣除休息时长。")
+                    if schedule.calendarMode == .chinaStatutory {
+                        Text("离线法定节假日与调休数据覆盖 2026 年；其他年份按周一至周五工作、周末休息计算。")
+                    }
+                }
+            }
+        }
+        .onChange(of: schedule.isEnabled) { _, _ in fillMissingFixedWindow() }
+        .onChange(of: schedule.scheduleMode) { _, _ in fillMissingFixedWindow() }
+    }
+
+    private func fillMissingFixedWindow() {
+        guard schedule.isEnabled, schedule.scheduleMode == .fixedWindow else { return }
+        if schedule.startMinute == nil { schedule.startMinute = 540 }
+        if schedule.endMinute == nil { schedule.endMinute = 1080 }
+    }
+
+    private func timeBinding(_ keyPath: WritableKeyPath<WorkScheduleEditorState, Int?>,
+                             fallback: Int) -> Binding<Date> {
+        Binding {
+            let minute = schedule[keyPath: keyPath] ?? fallback
+            return Calendar.current.date(from: DateComponents(hour: minute / 60, minute: minute % 60)) ?? Date()
+        } set: { date in
+            let parts = Calendar.current.dateComponents([.hour, .minute], from: date)
+            schedule[keyPath: keyPath] = (parts.hour ?? 0) * 60 + (parts.minute ?? 0)
+        }
+    }
+}
+
 struct OnboardingView: View {
     @Environment(\.timeTraceDesign) private var design
 
@@ -66,10 +194,7 @@ struct OnboardingView: View {
     )
     @State private var radius = 200.0
     @State private var placeName = "工作地点"
-    @State private var weekdaysMask = 0b0111110
-    @State private var useNormalHours = true
-    @State private var normalStart = Calendar.current.date(from: DateComponents(hour: 9)) ?? Date()
-    @State private var normalEnd = Calendar.current.date(from: DateComponents(hour: 18)) ?? Date()
+    @State private var schedule = WorkScheduleEditorState()
     @FocusState private var focusedField: WorkplaceInputField?
     @State private var locating = false
     @State private var locationAccuracy: CLLocationAccuracy?
@@ -135,47 +260,22 @@ struct OnboardingView: View {
                     )
                 }
 
-                Section {
-                    WeekdayPicker(mask: $weekdaysMask)
-                    Toggle("设置正常工作时间", isOn: $useNormalHours)
-                    if useNormalHours {
-                        DatePicker("开始", selection: $normalStart, displayedComponents: .hourAndMinute)
-                        DatePicker("结束", selection: $normalEnd, displayedComponents: .hourAndMinute)
-                    }
-                } header: {
-                    Text("常规安排")
-                } footer: {
-                    VStack(alignment: .leading, spacing: 4) {
-                        Text("用于计算正常工时和加班；休息日也会持续记录地点进出。结束时间早于开始时间时，视为次日下班。")
-                        if useNormalHours && minuteOfDay(normalStart) == minuteOfDay(normalEnd) {
-                            Text("上班时间和下班时间不能相同。")
-                                .foregroundStyle(.red)
-                        }
-                    }
-                }
+                WorkScheduleEditorSection(schedule: $schedule)
 
                 Section {
                     Button("完成配置") {
-                        guard let schedule = WorkScheduleSnapshot(
-                            weekdaysMask: weekdaysMask,
-                            startMinute: useNormalHours ? minuteOfDay(normalStart) : nil,
-                            endMinute: useNormalHours ? minuteOfDay(normalEnd) : nil,
-                            timeZoneIdentifier: TimeZone.current.identifier,
-                            isEnabled: useNormalHours,
-                            calendarMode: .chinaStatutory
-                        ) else { return }
+                        guard let snapshot = schedule.snapshot else { return }
                         model.finishOnboarding(
                             latitude: coordinate.latitude,
                             longitude: coordinate.longitude,
                             radius: radius,
-                            schedule: schedule,
+                            schedule: snapshot,
                             placeName: placeName
                         )
                     }
                     .frame(maxWidth: .infinity)
                     .disabled(placeName.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ||
-                              (useNormalHours && (weekdaysMask & 0b1111111 == 0 ||
-                               minuteOfDay(normalStart) == minuteOfDay(normalEnd))))
+                              schedule.snapshot == nil)
                 } footer: {
                     Text("系统会先请求使用期间定位；完成后会继续请求“始终允许”和通知权限，用于后台围栏记录与进出通知。")
                 }
@@ -217,10 +317,6 @@ struct OnboardingView: View {
         locating = false
     }
 
-    private func minuteOfDay(_ date: Date) -> Int {
-        let parts = Calendar.current.dateComponents([.hour, .minute], from: date)
-        return (parts.hour ?? 0) * 60 + (parts.minute ?? 0)
-    }
 }
 
 struct WeekdayPicker: View {
