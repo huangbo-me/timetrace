@@ -42,6 +42,7 @@ struct InsightShareSnapshot: Identifiable {
     let id = UUID()
     let journal: TimeJournal
     let copy: PeriodInsightCopy?
+    let overtime: InsightOvertimePresentation?
     let trend: JournalTrendSnapshot
 }
 
@@ -58,6 +59,7 @@ struct JournalSharePreview: View {
 
     let journal: TimeJournal
     var insightCopy: PeriodInsightCopy? = nil
+    var overtime: InsightOvertimePresentation? = nil
     var trend: JournalTrendSnapshot? = nil
     @State private var shareFile: JournalShareFile?
     @State private var error: String?
@@ -109,7 +111,7 @@ struct JournalSharePreview: View {
         error = nil
         do {
             previewData = try JournalPosterRenderer.png(journal: journal, insightCopy: insightCopy,
-                trend: trend, showPlaceName: false, theme: design.theme)
+                overtime: overtime, trend: trend, showPlaceName: false, theme: design.theme)
         } catch {
             self.error = "暂时无法生成图片，请重试。"
         }
@@ -149,6 +151,7 @@ struct JournalPoster: View {
     static let width: CGFloat = 360
     let journal: TimeJournal
     var insightCopy: PeriodInsightCopy? = nil
+    var overtime: InsightOvertimePresentation? = nil
     var trend: JournalTrendSnapshot? = nil
     var showPlaceName = false
     var theme: AppTheme = .paper
@@ -168,7 +171,8 @@ struct JournalPoster: View {
 
             Color.clear.frame(height: 18)
 
-            PeriodInsightCard(journal: journal, copy: insightCopy, showsEvidenceLink: false,
+            PeriodInsightCard(journal: journal, copy: insightCopy, overtime: overtime,
+                              showsEvidenceLink: false,
                               scopeLabel: showPlaceName ? journal.scope : journal.privateScope,
                               forSharing: true) {}
                 .compositingGroup()
@@ -243,13 +247,20 @@ enum JournalDownloadCode {
 
 enum JournalPosterRenderer {
     enum RenderError: Error { case unavailable }
-    @MainActor static func write(journal: TimeJournal, insightCopy: PeriodInsightCopy? = nil, trend: JournalTrendSnapshot? = nil, showPlaceName: Bool, theme: AppTheme = .paper, to url: URL) throws {
-        try png(journal: journal, insightCopy: insightCopy, trend: trend,
+    @MainActor static func write(journal: TimeJournal, insightCopy: PeriodInsightCopy? = nil,
+                                 overtime: InsightOvertimePresentation? = nil,
+                                 trend: JournalTrendSnapshot? = nil, showPlaceName: Bool,
+                                 theme: AppTheme = .paper, to url: URL) throws {
+        try png(journal: journal, insightCopy: insightCopy, overtime: overtime, trend: trend,
                 showPlaceName: showPlaceName, theme: theme).write(to: url, options: .atomic)
     }
-    @MainActor static func png(journal: TimeJournal, insightCopy: PeriodInsightCopy? = nil, trend: JournalTrendSnapshot? = nil, showPlaceName: Bool, theme: AppTheme = .paper) throws -> Data {
+    @MainActor static func png(journal: TimeJournal, insightCopy: PeriodInsightCopy? = nil,
+                               overtime: InsightOvertimePresentation? = nil,
+                               trend: JournalTrendSnapshot? = nil, showPlaceName: Bool,
+                               theme: AppTheme = .paper) throws -> Data {
         let renderer = ImageRenderer(content: JournalPoster(journal: journal,
-            insightCopy: insightCopy, trend: trend, showPlaceName: showPlaceName, theme: theme))
+            insightCopy: insightCopy, overtime: overtime, trend: trend,
+            showPlaceName: showPlaceName, theme: theme))
         renderer.scale = 3
         renderer.isOpaque = true
         // Use a fresh bitmap context for each export, including repeated privacy/theme changes.
@@ -300,6 +311,7 @@ struct PeriodInsightCard: View {
     @ScaledMetric(relativeTo: .title2) private var clockNumberSize: CGFloat = 27
     let journal: TimeJournal
     var copy: PeriodInsightCopy?
+    var overtime: InsightOvertimePresentation? = nil
     var showsEvidenceLink = true
     var scopeLabel: String? = nil
     var forSharing = false
@@ -343,6 +355,7 @@ struct PeriodInsightCard: View {
                         } second: {
                             durationMetric("日均工作", value: values["平均每天工作"] ?? "—", prominent: false)
                         }
+                        if let overtime { overtimeBlock(overtime) }
                         clockBand(first: "最晚下班", firstValue: values["最晚下班"],
                                   second: "平均下班", secondValue: values["平均下班"])
                     }
@@ -482,6 +495,22 @@ struct PeriodInsightCard: View {
 
     private var rule: some View {
         Rectangle().fill(design.border.opacity(0.65)).frame(height: 1)
+    }
+
+    private func overtimeBlock(_ overtime: InsightOvertimePresentation) -> some View {
+        HStack(alignment: .firstTextBaseline, spacing: 10) {
+            Label(overtime.title, systemImage: "clock.badge.exclamationmark")
+                .font(forSharing ? .system(size: 10, weight: .medium) : .caption.weight(.medium))
+                .foregroundStyle(.orange)
+            Spacer(minLength: 8)
+            durationText(overtime.value, prominent: false)
+                .lineLimit(1)
+                .minimumScaleFactor(0.7)
+        }
+        .padding(forSharing ? 10 : 12)
+        .background(Color.orange.opacity(0.09), in: RoundedRectangle(cornerRadius: 14))
+        .accessibilityElement(children: .ignore)
+        .accessibilityLabel(overtime.title + overtime.value)
     }
 
     @ViewBuilder private func columns<First: View, Second: View>(

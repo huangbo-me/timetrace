@@ -1,6 +1,30 @@
 import Charts
 import SwiftUI
 
+struct InsightOvertimePresentation {
+    let title: String
+    let totalOvertime: TimeInterval?
+
+    init?(type: PlaceType?, range: InsightRange, breakdowns: [OvertimeBreakdown?]) {
+        guard type == .work else { return nil }
+        title = switch range {
+        case .today: "今日加班时长"
+        case .recentThreeDays: "近三天加班时长"
+        case .thisWeek: "本周加班时长"
+        case .previousWeek: "上周加班时长"
+        case .recentMonth: "最近一个月加班时长"
+        case .custom: "自定义期间加班时长"
+        }
+        totalOvertime = breakdowns.allSatisfy { $0 != nil }
+            ? breakdowns.compactMap { $0 }.reduce(0) { $0 + $1.totalOvertime }
+            : nil
+    }
+
+    var value: String {
+        totalOvertime.map(TimeTraceFormat.duration) ?? "—"
+    }
+}
+
 struct InsightsView: View {
     @Environment(\.timeTraceDesign) private var design
 
@@ -33,6 +57,7 @@ struct InsightsView: View {
                     if journal.canShare {
                         Button {
                             shareSnapshot = InsightShareSnapshot(journal: journal, copy: insight,
+                                overtime: overtimePresentation,
                                 trend: JournalTrendSnapshot(summary: trendSummary, metric: trendMetric,
                                     presentation: insightPresentation, calendar: workCalendar, now: summaryNow))
                         } label: {
@@ -46,7 +71,8 @@ struct InsightsView: View {
                     }
                 }
 
-                PeriodInsightCard(journal: journal, copy: insight, selectType: { selectedType = $0 }) {
+                PeriodInsightCard(journal: journal, copy: insight, overtime: overtimePresentation,
+                                  selectType: { selectedType = $0 }) {
                     selectedFinding = journal.summaryEvidence ?? journal.mainFinding
                 }
 
@@ -129,7 +155,8 @@ struct InsightsView: View {
             summaryNow = date
         }
         .sheet(item: $shareSnapshot) { snapshot in
-            JournalSharePreview(journal: snapshot.journal, insightCopy: snapshot.copy, trend: snapshot.trend)
+            JournalSharePreview(journal: snapshot.journal, insightCopy: snapshot.copy,
+                                overtime: snapshot.overtime, trend: snapshot.trend)
         }
         .sheet(isPresented: $showingCustomDates) {
             NavigationStack {
@@ -279,6 +306,15 @@ struct InsightsView: View {
 
     private var insightPresentation: PlaceInsightPresentation {
         PlaceInsightPresentation(type: selectedType)
+    }
+
+    private var overtimePresentation: InsightOvertimePresentation? {
+        let completedSessions = trendSummary.days.flatMap(\.sessions).filter { $0.duration != nil }
+        return InsightOvertimePresentation(
+            type: selectedType,
+            range: range,
+            breakdowns: completedSessions.map { model.overtimeBreakdown(for: $0, now: summaryNow) }
+        )
     }
 
     private var placeSummaryMetrics: [PlaceSummaryMetric] {

@@ -57,6 +57,53 @@ final class AnalyticsServiceTests: XCTestCase {
         XCTAssertEqual(result.totalOvertimeText, "加班 \(TimeTraceFormat.duration(6.5 * 3600))")
     }
 
+    func testInsightOvertimePresentationOnlyExistsForWorkType() {
+        XCTAssertNotNil(InsightOvertimePresentation(type: .work, range: .thisWeek, breakdowns: []))
+        XCTAssertNil(InsightOvertimePresentation(type: .study, range: .thisWeek, breakdowns: []))
+        XCTAssertNil(InsightOvertimePresentation(type: nil, range: .thisWeek, breakdowns: []))
+    }
+
+    func testInsightOvertimePresentationTitleFollowsSelectedRange() throws {
+        XCTAssertEqual(
+            try XCTUnwrap(InsightOvertimePresentation(type: .work, range: .today, breakdowns: [])).title,
+            "今日加班时长"
+        )
+        XCTAssertEqual(
+            try XCTUnwrap(InsightOvertimePresentation(type: .work, range: .thisWeek, breakdowns: [])).title,
+            "本周加班时长"
+        )
+        XCTAssertEqual(
+            try XCTUnwrap(InsightOvertimePresentation(type: .work, range: .previousWeek, breakdowns: [])).title,
+            "上周加班时长"
+        )
+    }
+
+    func testInsightOvertimePresentationSumsCurrentPeriodOvertime() throws {
+        let fixed = OvertimeBreakdown(normalDuration: 8 * 3600, earlyOvertime: 1800,
+                                      lateOvertime: 3600, workdayOvertime: 0, restDayOvertime: 0)
+        let flexible = OvertimeBreakdown(normalDuration: 8 * 3600, earlyOvertime: 0,
+                                         lateOvertime: 0, workdayOvertime: 2 * 3600,
+                                         restDayOvertime: 3 * 3600)
+
+        let result = try XCTUnwrap(InsightOvertimePresentation(
+            type: .work, range: .thisWeek, breakdowns: [fixed, flexible]
+        ))
+
+        XCTAssertEqual(result.totalOvertime, 6.5 * 3600)
+        XCTAssertEqual(result.value, "6小时 30分钟")
+    }
+
+    func testInsightOvertimePresentationDoesNotReportPartialTotal() throws {
+        let known = OvertimeBreakdown(normalDuration: 8 * 3600, earlyOvertime: 0,
+                                      lateOvertime: 3600, workdayOvertime: 0, restDayOvertime: 0)
+        let result = try XCTUnwrap(InsightOvertimePresentation(
+            type: .work, range: .thisWeek, breakdowns: [known, nil]
+        ))
+
+        XCTAssertNil(result.totalOvertime)
+        XCTAssertEqual(result.value, "—")
+    }
+
     func testHistoryOvertimeKeepsKnownWorkdayOvertimeWhenAnotherBreakdownIsUnknown() {
         let known = OvertimeBreakdown(normalDuration: 8 * 3600, earlyOvertime: 0,
                                       lateOvertime: 0, workdayOvertime: 2 * 3600, restDayOvertime: 0)
@@ -73,6 +120,33 @@ final class AnalyticsServiceTests: XCTestCase {
         XCTAssertNil(HistoryOvertimePresentation([]).workdayOvertimeText)
         XCTAssertNil(HistoryOvertimePresentation([]).completeTotals)
         XCTAssertNil(HistoryOvertimePresentation([]).totalOvertimeText)
+    }
+
+    func testHistoryOvertimeRequiresWorkAndUnknownSessionsButExcludesNonworkSessions() {
+        let workPlace = ActivityTrigger(activityId: activityId, type: .geofence, placeType: .work)
+        let homePlace = ActivityTrigger(activityId: activityId, type: .geofence, placeType: .home)
+        let workStart = ActivityEvent(
+            activityId: activityId, eventType: .geofenceEnter, timestamp: date(day: 1, hour: 9),
+            source: .coreLocation, metadata: EventMetadata(values: ["placeType": PlaceType.work.rawValue])
+        )
+        let homeStart = ActivityEvent(
+            activityId: activityId, eventType: .geofenceEnter, timestamp: date(day: 1, hour: 20),
+            source: .coreLocation, metadata: EventMetadata(values: ["placeType": PlaceType.home.rawValue])
+        )
+        let workSession = ActivitySession(activityId: activityId, placeTriggerId: workPlace.id,
+                                          startAt: workStart.timestamp, startEventId: workStart.id)
+        let homeSession = ActivitySession(activityId: activityId, placeTriggerId: homePlace.id,
+                                          startAt: homeStart.timestamp, startEventId: homeStart.id)
+        let unknownSession = ActivitySession(activityId: activityId, startAt: date(day: 1, hour: 22))
+
+        XCTAssertEqual(
+            HistoryOvertimePresentation.requiredSessionIDs(
+                sessions: [workSession, homeSession, unknownSession],
+                events: [workStart, homeStart],
+                places: [workPlace, homePlace]
+            ),
+            [workSession.id, unknownSession.id]
+        )
     }
 
     @MainActor
@@ -96,11 +170,36 @@ final class AnalyticsServiceTests: XCTestCase {
                                               lateOvertime: 0, workdayOvertime: 0,
                                               restDayOvertime: 3 * 3600)
             ],
+            overtimeRequiredSessionIDs: [first.id, second.id],
             crossedDays: [:]
         )
 
         XCTAssertEqual(card.visibleOvertimeTexts, ["加班 5小时 0分钟"],
                        "The history card must show one daily total, not overtime categories or per-session totals")
+    }
+
+    @MainActor
+    func testHistoryDayCardIgnoresNonworkSessionWhenCompletingDailyOvertime() {
+        let workSession = ActivitySession(activityId: activityId, startAt: date(day: 1, hour: 9),
+                                          endAt: date(day: 1, hour: 19))
+        let homeSession = ActivitySession(activityId: activityId, startAt: date(day: 1, hour: 20),
+                                          endAt: date(day: 1, hour: 21))
+        let summary = DailyActivitySummary(
+            date: date(day: 1, hour: 0), firstArrivalTime: workSession.startAt,
+            lastDepartureTime: homeSession.endAt, totalDuration: 11 * 3600,
+            sessionCount: 2, isIncomplete: false, sessions: [workSession, homeSession]
+        )
+        let known = OvertimeBreakdown(normalDuration: 8 * 3600, earlyOvertime: 0,
+                                      lateOvertime: 0, workdayOvertime: 2 * 3600, restDayOvertime: 0)
+        let card = HistoryDayCard(
+            summary: summary, durationTier: .long, origins: [:],
+            overtime: [workSession.id: known],
+            overtimeRequiredSessionIDs: [workSession.id],
+            crossedDays: [:]
+        )
+
+        XCTAssertEqual(card.visibleOvertimeTexts, ["加班 \(TimeTraceFormat.duration(2 * 3600))"])
+        XCTAssertEqual(card.overtimePresentation.completeTotals?.totalOvertime, 2 * 3600)
     }
 
     @MainActor
@@ -117,7 +216,9 @@ final class AnalyticsServiceTests: XCTestCase {
         let known = OvertimeBreakdown(normalDuration: 8 * 3600, earlyOvertime: 0,
                                       lateOvertime: 0, workdayOvertime: 2 * 3600, restDayOvertime: 0)
         let card = HistoryDayCard(summary: summary, durationTier: .long,
-                                  origins: [:], overtime: [knownSession.id: known], crossedDays: [:])
+                                  origins: [:], overtime: [knownSession.id: known],
+                                  overtimeRequiredSessionIDs: [knownSession.id, unknownSession.id],
+                                  crossedDays: [:])
 
         XCTAssertNil(card.overtimePresentation.completeTotals)
         XCTAssertNil(card.overtimePresentation.totalOvertimeText,
@@ -1276,6 +1377,39 @@ final class TimeJournalServiceTests: XCTestCase {
         }
 
         print("JOURNAL_VISUAL_PATH=\(directory.path)")
+    }
+
+    func testOvertimeBlockRendersInMainCardAndSharePoster() throws {
+        let work = ActivityTrigger(activityId: activityID, type: .geofence, placeType: .work)
+        let result = journal([record(7, hours: 10, place: work.id)], places: [work],
+                             filter: .forType(.work, places: [work]))
+        let breakdown = OvertimeBreakdown(normalDuration: 8 * 3600, earlyOvertime: 0,
+                                          lateOvertime: 0, workdayOvertime: 2 * 3600,
+                                          restDayOvertime: 0)
+        let overtime = try XCTUnwrap(InsightOvertimePresentation(
+            type: .work, range: .thisWeek, breakdowns: [breakdown]
+        ))
+
+        let plainCard = ImageRenderer(content: PeriodInsightCard(journal: result) {}
+            .frame(width: 350))
+        let overtimeCard = ImageRenderer(content: PeriodInsightCard(journal: result, overtime: overtime) {}
+            .frame(width: 350))
+        let plainCardImage = try XCTUnwrap(plainCard.uiImage)
+        let overtimeCardImage = try XCTUnwrap(overtimeCard.uiImage)
+        XCTAssertGreaterThan(overtimeCardImage.size.height, plainCardImage.size.height)
+
+        let plainPoster = try JournalPosterRenderer.png(journal: result, showPlaceName: false)
+        let overtimePoster = try JournalPosterRenderer.png(
+            journal: result, overtime: overtime, showPlaceName: false
+        )
+        XCTAssertNotEqual(overtimePoster, plainPoster)
+
+        let directory = FileManager.default.temporaryDirectory
+            .appendingPathComponent("overtime-share-visuals", isDirectory: true)
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        try overtimePoster.write(to: directory.appendingPathComponent("poster.png"))
+        try XCTUnwrap(overtimeCardImage.pngData()).write(to: directory.appendingPathComponent("card.png"))
+        print("OVERTIME_VISUAL_PATH=\(directory.path)")
     }
 
 

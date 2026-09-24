@@ -59,6 +59,21 @@ struct HistoryOvertimePresentation {
         guard workdayOvertime > 0 else { return nil }
         return "工作日加班 \(TimeTraceFormat.duration(workdayOvertime))"
     }
+
+    static func requiredSessionIDs(
+        sessions: [ActivitySession],
+        events: [ActivityEvent],
+        places: [ActivityTrigger]
+    ) -> Set<UUID> {
+        Set(sessions.compactMap { session in
+            let startEvent = events.first { $0.id == session.startEventId }
+            let place = places.first { $0.id == session.placeTriggerId }
+            let recordedType = startEvent?.metadata.values["placeType"].flatMap(PlaceType.init(rawValue:))
+                ?? place?.placeType
+            guard let recordedType else { return session.id }
+            return recordedType == .work ? session.id : nil
+        })
+    }
 }
 
 struct HistoryView: View {
@@ -84,6 +99,7 @@ struct HistoryView: View {
         let orphanedEvents = filteredOrphanedEvents
         let origins = originBySessionID
         let overtime = overtimeBySessionID
+        let requiredOvertimeSessionIDs = overtimeRequiredSessionIDs
         let daySpans = crossedDaysBySessionID
         let visibleSummaries = Array(allSummaries.prefix(displayedHistoryCount))
         let columns = HistoryMasonryColumns.distribute(visibleSummaries) { summary in
@@ -206,6 +222,7 @@ struct HistoryView: View {
         .sheet(item: $repairingEvent) { RepairOrphanedExitView(event: $0) }
         .sheet(item: $selectedSummary) { summary in
             HistoryDayDetailView(summary: summary, origins: origins, overtime: overtime,
+                                 overtimeRequiredSessionIDs: requiredOvertimeSessionIDs,
                                  crossedDays: daySpans, onSaved: { selectedSummary = nil })
         }
         .sheet(isPresented: $addingSession) { AddSessionView() }
@@ -301,6 +318,14 @@ struct HistoryView: View {
         })
     }
 
+    private var overtimeRequiredSessionIDs: Set<UUID> {
+        HistoryOvertimePresentation.requiredSessionIDs(
+            sessions: workSessions,
+            events: model.events,
+            places: model.triggers
+        )
+    }
+
     private var crossedDaysBySessionID: [UUID: Int] {
         Dictionary(uniqueKeysWithValues: workSessions.map { ($0.id, model.crossedDayCount(for: $0)) })
     }
@@ -346,6 +371,7 @@ struct HistoryView: View {
                 durationTier: durationTier(for: summary.totalDuration),
                 origins: origins,
                 overtime: overtime,
+                overtimeRequiredSessionIDs: overtimeRequiredSessionIDs,
                 crossedDays: crossedDays
             )
             .contentShape(RoundedRectangle(cornerRadius: 22, style: .continuous))
@@ -626,6 +652,7 @@ struct HistoryDayCard: View {
     let durationTier: HistoryDurationTier
     let origins: [UUID: HistoryRecordOrigin]
     let overtime: [UUID: OvertimeBreakdown]
+    let overtimeRequiredSessionIDs: Set<UUID>
     let crossedDays: [UUID: Int]
 
     private var tint: Color { durationTier.color }
@@ -635,7 +662,9 @@ struct HistoryDayCard: View {
     }
 
     var overtimePresentation: HistoryOvertimePresentation {
-        HistoryOvertimePresentation(summary.sessions.map { overtime[$0.id] })
+        HistoryOvertimePresentation(summary.sessions
+            .filter { overtimeRequiredSessionIDs.contains($0.id) }
+            .map { overtime[$0.id] })
     }
 
     var visibleOvertimeTexts: [String] {
@@ -727,12 +756,15 @@ private struct HistoryDayDetailView: View {
     let summary: DailyActivitySummary
     let origins: [UUID: HistoryRecordOrigin]
     let overtime: [UUID: OvertimeBreakdown]
+    let overtimeRequiredSessionIDs: Set<UUID>
     let crossedDays: [UUID: Int]
     let onSaved: () -> Void
     @State private var editingSession: ActivitySession?
 
     var body: some View {
-        let presentation = HistoryOvertimePresentation(summary.sessions.map { overtime[$0.id] })
+        let presentation = HistoryOvertimePresentation(summary.sessions
+            .filter { overtimeRequiredSessionIDs.contains($0.id) }
+            .map { overtime[$0.id] })
         NavigationStack {
             List {
                 Section {
