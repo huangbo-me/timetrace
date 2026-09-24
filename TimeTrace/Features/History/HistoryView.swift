@@ -32,14 +32,22 @@ struct HistoryOvertimePresentation {
     let lateOvertime: TimeInterval
     let workdayOvertime: TimeInterval
     let restDayOvertime: TimeInterval
+    private let hasCompleteBreakdown: Bool
 
-    init(_ breakdowns: [OvertimeBreakdown]) {
+    init(_ sessionBreakdowns: [OvertimeBreakdown?]) {
+        let breakdowns = sessionBreakdowns.compactMap { $0 }
+        hasCompleteBreakdown = !sessionBreakdowns.isEmpty && breakdowns.count == sessionBreakdowns.count
         normalDuration = breakdowns.reduce(0) { $0 + $1.normalDuration }
         totalOvertime = breakdowns.reduce(0) { $0 + $1.totalOvertime }
         earlyOvertime = breakdowns.reduce(0) { $0 + $1.earlyOvertime }
         lateOvertime = breakdowns.reduce(0) { $0 + $1.lateOvertime }
         workdayOvertime = breakdowns.reduce(0) { $0 + $1.workdayOvertime }
         restDayOvertime = breakdowns.reduce(0) { $0 + $1.restDayOvertime }
+    }
+
+    var completeTotals: (normalDuration: TimeInterval, totalOvertime: TimeInterval)? {
+        guard hasCompleteBreakdown else { return nil }
+        return (normalDuration, totalOvertime)
     }
 
     var workdayOvertimeText: String? {
@@ -718,9 +726,7 @@ private struct HistoryDayDetailView: View {
     @State private var editingSession: ActivitySession?
 
     var body: some View {
-        let breakdowns = summary.sessions.compactMap { overtime[$0.id] }
-        let presentation = HistoryOvertimePresentation(breakdowns)
-        let hasCompleteBreakdown = !summary.sessions.isEmpty && breakdowns.count == summary.sessions.count
+        let presentation = HistoryOvertimePresentation(summary.sessions.map { overtime[$0.id] })
         NavigationStack {
             List {
                 Section {
@@ -732,21 +738,21 @@ private struct HistoryDayDetailView: View {
                     LabeledContent("离开", value: summary.lastDepartureTime.map {
                         TimeTraceFormat.time.string(from: $0)
                     } ?? "未检测到")
-                    if hasCompleteBreakdown {
-                        LabeledContent("正常工时", value: TimeTraceFormat.duration(presentation.normalDuration))
-                        LabeledContent("加班总计", value: TimeTraceFormat.duration(presentation.totalOvertime))
+                    if let totals = presentation.completeTotals {
+                        LabeledContent("正常工时", value: TimeTraceFormat.duration(totals.normalDuration))
+                        LabeledContent("加班总计", value: TimeTraceFormat.duration(totals.totalOvertime))
                         if presentation.earlyOvertime > 0 {
                             LabeledContent("早到加班", value: TimeTraceFormat.duration(presentation.earlyOvertime))
                         }
                         if presentation.lateOvertime > 0 {
                             LabeledContent("晚走加班", value: TimeTraceFormat.duration(presentation.lateOvertime))
                         }
-                        if presentation.workdayOvertime > 0 {
-                            LabeledContent("工作日加班", value: TimeTraceFormat.duration(presentation.workdayOvertime))
-                        }
                         if presentation.restDayOvertime > 0 {
                             LabeledContent("休息日加班", value: TimeTraceFormat.duration(presentation.restDayOvertime))
                         }
+                    }
+                    if presentation.workdayOvertime > 0 {
+                        LabeledContent("工作日加班", value: TimeTraceFormat.duration(presentation.workdayOvertime))
                     }
                 }
 

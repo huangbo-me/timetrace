@@ -52,6 +52,17 @@ final class AnalyticsServiceTests: XCTestCase {
         XCTAssertEqual(result.earlyOvertime, 1800)
         XCTAssertEqual(result.lateOvertime, 3600)
         XCTAssertEqual(result.restDayOvertime, 3 * 3600)
+        XCTAssertEqual(result.completeTotals?.normalDuration, 15 * 3600)
+        XCTAssertEqual(result.completeTotals?.totalOvertime, 6.5 * 3600)
+    }
+
+    func testHistoryOvertimeKeepsKnownWorkdayOvertimeWhenAnotherBreakdownIsUnknown() {
+        let known = OvertimeBreakdown(normalDuration: 8 * 3600, earlyOvertime: 0,
+                                      lateOvertime: 0, workdayOvertime: 2 * 3600, restDayOvertime: 0)
+        let result = HistoryOvertimePresentation([known, nil])
+
+        XCTAssertEqual(result.workdayOvertimeText, "工作日加班 \(TimeTraceFormat.duration(2 * 3600))")
+        XCTAssertNil(result.completeTotals, "Unknown records must not be treated as zero in complete daily totals")
     }
 
     func testHistoryOvertimePresentationOmitsZeroWorkdayOvertime() {
@@ -59,6 +70,7 @@ final class AnalyticsServiceTests: XCTestCase {
                                       lateOvertime: 1800, workdayOvertime: 0, restDayOvertime: 0)
         XCTAssertNil(HistoryOvertimePresentation([fixed]).workdayOvertimeText)
         XCTAssertNil(HistoryOvertimePresentation([]).workdayOvertimeText)
+        XCTAssertNil(HistoryOvertimePresentation([]).completeTotals)
     }
 
     func testHistoryOriginIgnoresScheduleAdjustmentsButKeepsRecordCorrections() {
