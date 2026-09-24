@@ -80,7 +80,13 @@ enum WorkScheduleCalculator {
             guard let shiftStart = wallClockDate(on: day, minuteOfDay: startMinute,
                                                  calendar: calendar),
                   let shiftEnd = wallClockDate(on: endBase, minuteOfDay: endMinute,
-                                               calendar: calendar) else { return nil }
+                                               calendar: calendar),
+                  shiftEnd > shiftStart else {
+                // Missing local times (for example a spring DST gap) do not
+                // define a shift. Classify presence by its actual local day.
+                day = nextDay
+                continue
+            }
             let interval = DateInterval(start: shiftStart, end: shiftEnd)
             let workday = isWorkday(day, schedule: schedule, calendar: calendar)
             if workday {
@@ -214,7 +220,10 @@ enum WorkScheduleCalculator {
         components.hour = minuteOfDay / 60
         components.minute = minuteOfDay % 60
         components.second = 0
-        return calendar.date(from: components)
+        guard let date = calendar.date(from: components),
+              calendar.dateComponents([.year, .month, .day, .hour, .minute, .second], from: date)
+                == components else { return nil }
+        return date
     }
 }
 

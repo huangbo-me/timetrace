@@ -54,6 +54,7 @@ final class AnalyticsServiceTests: XCTestCase {
         XCTAssertEqual(result.restDayOvertime, 3 * 3600)
         XCTAssertEqual(result.completeTotals?.normalDuration, 15 * 3600)
         XCTAssertEqual(result.completeTotals?.totalOvertime, 6.5 * 3600)
+        XCTAssertEqual(result.totalOvertimeText, "加班 \(TimeTraceFormat.duration(6.5 * 3600))")
     }
 
     func testHistoryOvertimeKeepsKnownWorkdayOvertimeWhenAnotherBreakdownIsUnknown() {
@@ -71,6 +72,30 @@ final class AnalyticsServiceTests: XCTestCase {
         XCTAssertNil(HistoryOvertimePresentation([fixed]).workdayOvertimeText)
         XCTAssertNil(HistoryOvertimePresentation([]).workdayOvertimeText)
         XCTAssertNil(HistoryOvertimePresentation([]).completeTotals)
+        XCTAssertNil(HistoryOvertimePresentation([]).totalOvertimeText)
+    }
+
+    @MainActor
+    func testHistoryDayCardKeepsUnknownBreakdownOutOfCompleteTotal() {
+        let knownSession = ActivitySession(activityId: activityId, startAt: date(day: 1, hour: 8),
+                                           endAt: date(day: 1, hour: 18))
+        let unknownSession = ActivitySession(activityId: activityId, startAt: date(day: 1, hour: 19),
+                                             endAt: date(day: 1, hour: 20))
+        let summary = DailyActivitySummary(
+            date: date(day: 1, hour: 0), firstArrivalTime: knownSession.startAt,
+            lastDepartureTime: unknownSession.endAt, totalDuration: 11 * 3600,
+            sessionCount: 2, isIncomplete: false, sessions: [knownSession, unknownSession]
+        )
+        let known = OvertimeBreakdown(normalDuration: 8 * 3600, earlyOvertime: 0,
+                                      lateOvertime: 0, workdayOvertime: 2 * 3600, restDayOvertime: 0)
+        let card = HistoryDayCard(summary: summary, durationTier: .long,
+                                  origins: [:], overtime: [knownSession.id: known], crossedDays: [:])
+
+        XCTAssertNil(card.overtimePresentation.completeTotals)
+        XCTAssertNil(card.overtimePresentation.totalOvertimeText,
+                     "A card must not label the known partial sum as total overtime")
+        XCTAssertEqual(card.overtimePresentation.workdayOvertimeText,
+                       "工作日加班 \(TimeTraceFormat.duration(2 * 3600))")
     }
 
     func testHistoryOriginIgnoresScheduleAdjustmentsButKeepsRecordCorrections() {
@@ -632,6 +657,49 @@ final class AnalyticsServiceTests: XCTestCase {
         }
     }
 
+    func testMissingDSTStartOnPreviousRestDayDoesNotCrashFollowingWorkday() throws {
+        let schedule = try XCTUnwrap(WorkScheduleSnapshot(
+            weekdaysMask: 62, startMinute: 150, endMinute: 180,
+            timeZoneIdentifier: "America/New_York", isEnabled: true
+        ))
+        let start = localDate(year: 2026, month: 3, day: 9, hour: 2, minute: 30,
+                              timeZoneIdentifier: "America/New_York")
+        let result = try XCTUnwrap(WorkScheduleCalculator.breakdown(
+            from: start, to: start.addingTimeInterval(1800), schedule: schedule
+        ))
+        XCTAssertEqual(result.normalDuration, 1800)
+        XCTAssertEqual(result.totalOvertime, 0)
+    }
+
+    func testMissingDSTStartSkipsWindowAndClassifiesRestDayPresence() throws {
+        let schedule = try XCTUnwrap(WorkScheduleSnapshot(
+            weekdaysMask: 62, startMinute: 150, endMinute: 180,
+            timeZoneIdentifier: "America/New_York", isEnabled: true
+        ))
+        let start = localDate(year: 2026, month: 3, day: 8, hour: 3,
+                              timeZoneIdentifier: "America/New_York")
+        let result = try XCTUnwrap(WorkScheduleCalculator.breakdown(
+            from: start, to: start.addingTimeInterval(3600), schedule: schedule
+        ))
+        XCTAssertEqual(result.normalDuration, 0)
+        XCTAssertEqual(result.restDayOvertime, 3600)
+    }
+
+    func testMissingDSTEndSkipsNormalizedWindowOnWorkday() throws {
+        let schedule = try XCTUnwrap(WorkScheduleSnapshot(
+            weekdaysMask: 127, startMinute: 90, endMinute: 150,
+            timeZoneIdentifier: "America/New_York", isEnabled: true
+        ))
+        let start = localDate(year: 2026, month: 3, day: 8, hour: 1, minute: 30,
+                              timeZoneIdentifier: "America/New_York")
+        let result = try XCTUnwrap(WorkScheduleCalculator.breakdown(
+            from: start, to: start.addingTimeInterval(3600), schedule: schedule
+        ))
+        XCTAssertEqual(result.normalDuration, 0)
+        XCTAssertEqual(result.restDayOvertime, 0)
+        XCTAssertEqual(result.totalOvertime, 3600)
+    }
+
     func testOvernightShiftUsesWallClockAcrossDSTTransitions() throws {
         let timeZoneIdentifier = "America/New_York"
         let schedule = try XCTUnwrap(WorkScheduleSnapshot(
@@ -775,12 +843,12 @@ final class AnalyticsServiceTests: XCTestCase {
         calendar.date(from: DateComponents(year: 2026, month: 9, day: day, hour: hour, minute: minute))!
     }
 
-    private func localDate(year: Int, month: Int, day: Int, hour: Int,
+    private func localDate(year: Int, month: Int, day: Int, hour: Int, minute: Int = 0,
                            timeZoneIdentifier: String = "Asia/Shanghai") -> Date {
         var localCalendar = Calendar(identifier: .gregorian)
         localCalendar.timeZone = TimeZone(identifier: timeZoneIdentifier)!
         return localCalendar.date(from: DateComponents(
-            year: year, month: month, day: day, hour: hour
+            year: year, month: month, day: day, hour: hour, minute: minute
         ))!
     }
 

@@ -50,6 +50,11 @@ struct HistoryOvertimePresentation {
         return (normalDuration, totalOvertime)
     }
 
+    var totalOvertimeText: String? {
+        guard let total = completeTotals?.totalOvertime, total > 0 else { return nil }
+        return "加班 \(TimeTraceFormat.duration(total))"
+    }
+
     var workdayOvertimeText: String? {
         guard workdayOvertime > 0 else { return nil }
         return "工作日加班 \(TimeTraceFormat.duration(workdayOvertime))"
@@ -390,7 +395,7 @@ private enum HistoryTypeFilter: Hashable {
     }
 }
 
-private enum HistoryDurationTier {
+enum HistoryDurationTier {
     case short
     case regular
     case long
@@ -614,7 +619,7 @@ private struct HistoryOrphanedExitRow: View {
     }
 }
 
-private struct HistoryDayCard: View {
+struct HistoryDayCard: View {
     @Environment(\.timeTraceDesign) private var design
 
     let summary: DailyActivitySummary
@@ -629,8 +634,12 @@ private struct HistoryDayCard: View {
         summary.sessions.map { crossedDays[$0.id] ?? 0 }.max() ?? 0
     }
 
+    var overtimePresentation: HistoryOvertimePresentation {
+        HistoryOvertimePresentation(summary.sessions.map { overtime[$0.id] })
+    }
+
     var body: some View {
-        let presentation = HistoryOvertimePresentation(summary.sessions.compactMap { overtime[$0.id] })
+        let presentation = overtimePresentation
         VStack(alignment: .leading, spacing: 14) {
             HStack(alignment: .top, spacing: 8) {
                 Text(TimeTraceFormat.day.string(from: summary.date))
@@ -661,8 +670,8 @@ private struct HistoryDayCard: View {
                 Text("\(summary.sessionCount) 个记录时段 · \(durationTier.label)")
                     .font(.caption)
                     .foregroundStyle(.secondary)
-                if presentation.totalOvertime > 0 {
-                    Text("加班 \(TimeTraceFormat.duration(presentation.totalOvertime))")
+                if let totalText = presentation.totalOvertimeText {
+                    Text(totalText)
                         .font(.caption.weight(.semibold))
                         .foregroundStyle(design.violet)
                 }

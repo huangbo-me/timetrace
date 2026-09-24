@@ -19,7 +19,7 @@ private final class NotificationFixtureCoder: NSCoder {
 @MainActor
 final class RepositoryTests: XCTestCase {
     func testWorkScheduleImpactPromptShowsStableCount() {
-        let prompt = WorkScheduleImpactPrompt(affectedCount: 16)
+        let prompt = WorkScheduleImpactPrompt(affectedSessionIDs: (0..<16).map { _ in UUID() })
         XCTAssertEqual(prompt.title, "排班变更应用范围")
         XCTAssertTrue(prompt.message.contains("当前地点共有 16 条未删除记录"))
         XCTAssertTrue(prompt.message.contains("已有 16 条记录保持原排班"))
@@ -900,7 +900,8 @@ final class RepositoryTests: XCTestCase {
             triggerId: place.id, latitude: place.latitude!, longitude: place.longitude!,
             radius: place.radius!, placeName: place.displayPlaceName, placeType: .work,
             schedule: revised,
-            scheduleEditScope: .futureOnly
+            scheduleEditScope: .futureOnly,
+            expectedScheduleSessionIDs: [] // Future-only edits do not require a matching target set.
         ))
         let oldSnapshot = try XCTUnwrap(WorkScheduleResolver.snapshot(
             for: current, events: model.events, currentPlace: place
@@ -956,7 +957,8 @@ final class RepositoryTests: XCTestCase {
             triggerId: first.id, latitude: first.latitude!, longitude: first.longitude!,
             radius: first.radius!, placeName: first.displayPlaceName, placeType: .work,
             schedule: revised,
-            scheduleEditScope: .allHistory
+            scheduleEditScope: .allHistory,
+            expectedScheduleSessionIDs: model.workScheduleAffectedSessions(triggerId: first.id).map(\.id)
         ))
         let revisions = model.events.filter {
             $0.metadata.values["adjustmentKind"] == WorkScheduleSnapshot.adjustmentKind
@@ -985,6 +987,87 @@ final class RepositoryTests: XCTestCase {
             XCTAssertEqual(breakdown.normalDuration, 0)
             XCTAssertEqual(breakdown.totalOvertime, 0)
         }
+    }
+
+    func testAllHistoryConfirmationRejectsNewSessionAndRecapturesTargets() throws {
+        try assertAllHistoryConfirmationRejectsDrift(deleteAfterPrompt: false)
+    }
+
+    func testAllHistoryConfirmationRejectsSoftDeletionAndRecapturesTargets() throws {
+        try assertAllHistoryConfirmationRejectsDrift(deleteAfterPrompt: true)
+    }
+
+    func testAllHistoryConfirmationRejectsReplacementEvenWhenCountIsUnchanged() throws {
+        try assertAllHistoryConfirmationRejectsDrift(deleteAfterPrompt: true, replaceAfterPrompt: true)
+    }
+
+    private func assertAllHistoryConfirmationRejectsDrift(deleteAfterPrompt: Bool,
+                                                          replaceAfterPrompt: Bool = false) throws {
+        let geofence = FakeGeofenceService()
+        let model = AppModel(inMemory: true, geofence: geofence, notifications: FakeNotificationService())
+        model.load()
+        let original = legacySchedule(weekdaysMask: 62, startMinute: 540, endMinute: 1080)
+        model.finishOnboarding(latitude: 31.2, longitude: 121.4, radius: 200,
+                               schedule: original, placeName: "A")
+        let place = try XCTUnwrap(model.workTrigger)
+        let now = Date()
+        geofence.emit(.entered(triggerId: place.id, timestamp: now.addingTimeInterval(-7200)))
+        geofence.emit(.exited(triggerId: place.id, timestamp: now.addingTimeInterval(-3600)))
+        let first = try XCTUnwrap(model.workSessions.first)
+        let prompt = WorkScheduleImpactPrompt(model: model, triggerId: place.id)
+        XCTAssertEqual(prompt.affectedCount, 1)
+        XCTAssertEqual(prompt.affectedSessionIDs, [first.id])
+
+        if deleteAfterPrompt {
+            XCTAssertTrue(model.deleteSession(first))
+        }
+        let expectedIDs: [UUID]
+        if !deleteAfterPrompt || replaceAfterPrompt {
+            geofence.emit(.entered(triggerId: place.id, timestamp: now.addingTimeInterval(-1800)))
+            let added = try XCTUnwrap(model.workSessions.first { $0.endAt == nil })
+            expectedIDs = (deleteAfterPrompt ? [added.id] : [first.id, added.id])
+                .sorted { $0.uuidString < $1.uuidString }
+        } else {
+            expectedIDs = []
+        }
+        let eventIDsBeforeSave = Set(model.events.map(\.id))
+        let revised = legacySchedule(weekdaysMask: 127, startMinute: 600, endMinute: 1140)
+        XCTAssertFalse(model.updateWorkplace(
+            triggerId: place.id, latitude: 32, longitude: 122, radius: 300,
+            placeName: "Changed", schedule: revised, scheduleEditScope: .allHistory,
+            expectedScheduleSessionIDs: prompt.affectedSessionIDs
+        ))
+        XCTAssertEqual(model.workScheduleEditError, .affectedSessionsChanged)
+        XCTAssertEqual(place.displayPlaceName, "A")
+        XCTAssertEqual(place.latitude, 31.2)
+        XCTAssertEqual(place.longitude, 121.4)
+        XCTAssertEqual(place.radius, 200)
+        XCTAssertEqual(place.workScheduleSnapshot, original)
+        XCTAssertEqual(Set(model.events.map(\.id)), eventIDsBeforeSave)
+        XCTAssertTrue(model.events.filter {
+            $0.metadata.values["adjustmentKind"] == WorkScheduleSnapshot.adjustmentKind
+        }.isEmpty)
+        let refreshedPrompt = WorkScheduleImpactPrompt(model: model, triggerId: place.id,
+                                                       requiresReconfirmation: true)
+        XCTAssertEqual(refreshedPrompt.affectedCount, deleteAfterPrompt ? (replaceAfterPrompt ? 1 : 0) : 2)
+        XCTAssertEqual(refreshedPrompt.affectedSessionIDs, expectedIDs)
+        XCTAssertTrue(refreshedPrompt.requiresReconfirmation)
+        XCTAssertEqual(prompt.affectedCount, 1, "The original prompt remains the confirmed snapshot")
+        XCTAssertEqual(prompt.affectedSessionIDs, [first.id])
+
+        XCTAssertTrue(model.updateWorkplace(
+            triggerId: place.id, latitude: 32, longitude: 122, radius: 300,
+            placeName: "Changed", schedule: revised, scheduleEditScope: .allHistory,
+            expectedScheduleSessionIDs: refreshedPrompt.affectedSessionIDs
+        ))
+        XCTAssertNil(model.workScheduleEditError)
+        XCTAssertEqual(place.workScheduleSnapshot, revised)
+        let revisions = model.events.filter {
+            $0.metadata.values["adjustmentKind"] == WorkScheduleSnapshot.adjustmentKind
+        }
+        XCTAssertEqual(revisions.count, refreshedPrompt.affectedCount)
+        XCTAssertEqual(Set(revisions.compactMap { $0.metadata.values["sessionId"] }),
+                       Set(expectedIDs.map(\.uuidString)))
     }
 
     func testScheduleEditRejectsEqualStartAndEndBeforeCallingUseCase() {
@@ -1248,7 +1331,8 @@ final class RepositoryTests: XCTestCase {
                 triggerId: place.id, latitude: place.latitude!, longitude: place.longitude!,
                 radius: place.radius!, placeName: place.displayPlaceName, placeType: .work,
                 schedule: legacySchedule(weekdaysMask: 0b1111111, startMinute: 22 * 60, endMinute: 8 * 60),
-                scheduleEditScope: scope
+                scheduleEditScope: scope,
+                expectedScheduleSessionIDs: model.workScheduleAffectedSessions(triggerId: place.id).map(\.id)
             ))
             XCTAssertEqual(repaired.startAt, repairedStart, "scope=\(scope)")
             XCTAssertEqual(repaired.endAt, exit, "scope=\(scope)")

@@ -537,10 +537,25 @@ private struct AboutView: View {
 }
 
 struct WorkScheduleImpactPrompt: Equatable {
-    let affectedCount: Int
+    let affectedSessionIDs: [UUID]
+    let requiresReconfirmation: Bool
+
+    init(affectedSessionIDs: [UUID], requiresReconfirmation: Bool = false) {
+        self.affectedSessionIDs = affectedSessionIDs.sorted { $0.uuidString < $1.uuidString }
+        self.requiresReconfirmation = requiresReconfirmation
+    }
+
+    @MainActor
+    init(model: AppModel, triggerId: UUID, requiresReconfirmation: Bool = false) {
+        self.init(affectedSessionIDs: model.workScheduleAffectedSessions(triggerId: triggerId).map(\.id),
+                  requiresReconfirmation: requiresReconfirmation)
+    }
+
+    var affectedCount: Int { affectedSessionIDs.count }
     let title = "排班变更应用范围"
     var allHistoryButtonTitle: String { "全部历史（\(affectedCount) 条）" }
     var message: String {
+        (requiresReconfirmation ? "记录已变化，请重新确认应用范围。\n" : "") +
         "当前地点共有 \(affectedCount) 条未删除记录。\n" +
         "仅今后：已有 \(affectedCount) 条记录保持原排班，下次到达时生效。\n" +
         "全部历史：按新排班重新计算 \(affectedCount) 条记录，包含进行中的记录。"
@@ -693,7 +708,9 @@ struct WorkplaceEditorView: View {
                    isPresented: $showingScheduleScopeConfirmation,
                    presenting: scheduleImpactPrompt) { prompt in
                 Button("仅今后") { save(scope: .futureOnly) }
-                Button(prompt.allHistoryButtonTitle) { save(scope: .allHistory) }
+                Button(prompt.allHistoryButtonTitle) {
+                    save(scope: .allHistory, expectedSessionIDs: prompt.affectedSessionIDs)
+                }
                 Button("取消", role: .cancel) {}
             } message: { prompt in
                 Text(prompt.message)
@@ -713,16 +730,14 @@ struct WorkplaceEditorView: View {
     private func requestSave() {
         guard isScheduleValid else { return }
         if let trigger, placeType == .work, editedSchedule != trigger.workScheduleSnapshot {
-            scheduleImpactPrompt = WorkScheduleImpactPrompt(
-                affectedCount: model.workScheduleAffectedSessionCount(triggerId: trigger.id)
-            )
+            scheduleImpactPrompt = WorkScheduleImpactPrompt(model: model, triggerId: trigger.id)
             showingScheduleScopeConfirmation = true
         } else {
             save(scope: .futureOnly)
         }
     }
 
-    private func save(scope: WorkScheduleEditScope) {
+    private func save(scope: WorkScheduleEditScope, expectedSessionIDs: [UUID]? = nil) {
         let schedule = editedSchedule
         let saved: Bool
         if let trigger {
@@ -735,8 +750,19 @@ struct WorkplaceEditorView: View {
                 placeType: placeType,
                 isEnabled: placeEnabled,
                 schedule: schedule,
-                scheduleEditScope: scope
+                scheduleEditScope: scope,
+                expectedScheduleSessionIDs: expectedSessionIDs
             )
+            if !saved, model.workScheduleEditError == .affectedSessionsChanged {
+                // Wait for the current alert action to finish dismissing before
+                // presenting the freshly captured target set for confirmation.
+                DispatchQueue.main.async {
+                    scheduleImpactPrompt = WorkScheduleImpactPrompt(
+                        model: model, triggerId: trigger.id, requiresReconfirmation: true
+                    )
+                    showingScheduleScopeConfirmation = true
+                }
+            }
         } else {
             saved = model.addWorkplace(
                 latitude: coordinate.latitude,

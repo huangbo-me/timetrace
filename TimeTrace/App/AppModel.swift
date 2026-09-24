@@ -3,6 +3,10 @@ import CloudKit
 import Foundation
 import SwiftUI
 
+enum WorkScheduleEditError: Error {
+    case affectedSessionsChanged
+}
+
 enum ICloudSyncStatus: Equatable {
     case checking
     case enabled
@@ -50,6 +54,7 @@ final class AppModel: ObservableObject {
     @Published private(set) var geofenceCapabilityStatus: PlatformCapabilityStatus = .needsAuthorization
     @Published private(set) var notificationCapabilityStatus: PlatformCapabilityStatus = .needsAuthorization
     @Published var lastError: String?
+    private(set) var workScheduleEditError: WorkScheduleEditError?
     @Published private var sessionsObservedOutside = Set<UUID>()
 
     let geofence: GeofenceServicing
@@ -384,28 +389,41 @@ final class AppModel: ObservableObject {
     func updateWorkplace(triggerId: UUID, latitude: Double, longitude: Double, radius: Double,
                          placeName: String, placeType: PlaceType = .work, isEnabled: Bool? = nil,
                          schedule: WorkScheduleSnapshot? = nil,
-                         scheduleEditScope: WorkScheduleEditScope = .futureOnly) -> Bool {
+                         scheduleEditScope: WorkScheduleEditScope = .futureOnly,
+                         expectedScheduleSessionIDs: [UUID]? = nil) -> Bool {
         return updatePlace(triggerId: triggerId, latitude: latitude, longitude: longitude, radius: radius,
                     placeName: placeName, placeType: placeType, isEnabled: isEnabled,
-                    schedule: schedule, scheduleEditScope: scheduleEditScope)
+                    schedule: schedule, scheduleEditScope: scheduleEditScope,
+                    expectedScheduleSessionIDs: expectedScheduleSessionIDs)
     }
 
     @discardableResult
     func updatePlace(triggerId: UUID, latitude: Double, longitude: Double, radius: Double,
                      placeName: String, placeType: PlaceType, isEnabled: Bool? = nil,
                      schedule: WorkScheduleSnapshot? = nil,
-                     scheduleEditScope: WorkScheduleEditScope = .futureOnly) -> Bool {
+                     scheduleEditScope: WorkScheduleEditScope = .futureOnly,
+                     expectedScheduleSessionIDs: [UUID]? = nil) -> Bool {
+        workScheduleEditError = nil
         guard let trigger = triggers.first(where: { $0.id == triggerId && $0.type == .geofence }) else {
             lastError = "地点已不存在，请刷新后重试。"
             return false
         }
         let revisedSchedule = schedule
+        let affectedSessions = workScheduleAffectedSessions(triggerId: triggerId)
+        if scheduleEditScope == .allHistory {
+            guard let expectedScheduleSessionIDs,
+                  expectedScheduleSessionIDs.sorted(by: { $0.uuidString < $1.uuidString })
+                    == affectedSessions.map(\.id).sorted(by: { $0.uuidString < $1.uuidString }) else {
+                workScheduleEditError = .affectedSessionsChanged
+                return false
+            }
+        }
         do {
             let oldSchedule = trigger.workScheduleSnapshot
             let scheduleChanged = revisedSchedule.map { $0 != oldSchedule } ?? false
             let scheduleEvents = scheduleChanged
                 ? workScheduleAdjustmentEvents(
-                    for: trigger,
+                    sessions: affectedSessions,
                     snapshot: scheduleEditScope == .allHistory ? revisedSchedule! : oldSchedule,
                     onlyMissingSnapshots: scheduleEditScope == .futureOnly
                 )
@@ -464,11 +482,11 @@ final class AppModel: ObservableObject {
         workScheduleAffectedSessions(triggerId: triggerId).count
     }
 
-    private func workScheduleAdjustmentEvents(for trigger: ActivityTrigger,
+    private func workScheduleAdjustmentEvents(sessions: [ActivitySession],
                                                snapshot: WorkScheduleSnapshot?,
                                                onlyMissingSnapshots: Bool) -> [ActivityEvent] {
         guard let snapshot else { return [] }
-        return workScheduleAffectedSessions(triggerId: trigger.id).filter { session in
+        return sessions.filter { session in
             return !onlyMissingSnapshots || !hasStoredScheduleSnapshot(for: session)
         }.map { session in
             var metadata = EventMetadata(values: [
