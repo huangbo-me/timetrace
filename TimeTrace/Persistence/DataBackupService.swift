@@ -101,7 +101,14 @@ struct ActivityTriggerRecord: Codable, Sendable {
     }
 
     @MainActor func makeModel() -> ActivityTrigger {
-        let model = ActivityTrigger(activityId: activityId, type: .manual)
+        let model = ActivityTrigger(
+            activityId: activityId,
+            type: .manual,
+            workCalendarMode: workCalendarModeRaw.flatMap(WorkCalendarMode.init(rawValue:)) ?? .customWeekdays,
+            workScheduleMode: workScheduleModeRaw.flatMap(WorkScheduleMode.init(rawValue:)) ?? .fixedWindow,
+            standardWorkMinutes: standardWorkMinutes ?? 8 * 60,
+            restMinutes: restMinutes ?? 0
+        )
         model.id = id
         model.activityId = activityId
         model.typeRaw = typeRaw
@@ -119,10 +126,6 @@ struct ActivityTriggerRecord: Codable, Sendable {
         model.normalStartMinute = normalStartMinute
         model.normalEndMinute = normalEndMinute
         model.timeZoneIdentifier = timeZoneIdentifier
-        model.workCalendarModeRaw = workCalendarModeRaw ?? WorkCalendarMode.customWeekdays.rawValue
-        model.workScheduleModeRaw = workScheduleModeRaw ?? WorkScheduleMode.fixedWindow.rawValue
-        model.standardWorkMinutes = standardWorkMinutes ?? 8 * 60
-        model.restMinutes = restMinutes ?? 0
         model.createdAt = createdAt
         model.updatedAt = updatedAt
         return model

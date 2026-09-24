@@ -126,6 +126,14 @@ enum WorkScheduleMode: String, Codable, CaseIterable, Identifiable {
 struct WorkScheduleSnapshot: Codable, Equatable {
     static let adjustmentKind = "workSchedule"
 
+    static func isValidStandardWorkMinutes(_ value: Int) -> Bool {
+        (30...960).contains(value) && value.isMultiple(of: 30)
+    }
+
+    static func isValidRestMinutes(_ value: Int) -> Bool {
+        (0...720).contains(value) && value.isMultiple(of: 30)
+    }
+
     let weekdaysMask: Int
     let startMinute: Int?
     let endMinute: Int?
@@ -144,8 +152,8 @@ struct WorkScheduleSnapshot: Codable, Equatable {
           restMinutes: Int = 0) {
         let boundedMask = weekdaysMask & 0b1111111
         guard let timeZone = TimeZone(identifier: timeZoneIdentifier) else { return nil }
-        guard (30...960).contains(standardWorkMinutes), standardWorkMinutes.isMultiple(of: 30),
-              (0...720).contains(restMinutes), restMinutes.isMultiple(of: 30) else { return nil }
+        guard Self.isValidStandardWorkMinutes(standardWorkMinutes),
+              Self.isValidRestMinutes(restMinutes) else { return nil }
         if isEnabled && scheduleMode == .fixedWindow {
             guard boundedMask != 0,
                   let startMinute, let endMinute,
@@ -231,7 +239,8 @@ extension ActivityTrigger {
             startMinute: normalStartMinute,
             endMinute: normalEndMinute,
             timeZoneIdentifier: timeZoneIdentifier,
-            isEnabled: normalStartMinute != nil || normalEndMinute != nil,
+            isEnabled: workScheduleMode == .flexibleDuration ||
+                normalStartMinute != nil || normalEndMinute != nil,
             calendarMode: workCalendarMode,
             scheduleMode: workScheduleMode,
             standardWorkMinutes: standardWorkMinutes,
@@ -361,8 +370,10 @@ final class ActivityTrigger {
         self.timeZoneIdentifier = timeZoneIdentifier
         self.workCalendarModeRaw = workCalendarMode.rawValue
         self.workScheduleModeRaw = workScheduleMode.rawValue
-        self.standardWorkMinutes = standardWorkMinutes
-        self.restMinutes = restMinutes
+        self.standardWorkMinutes = WorkScheduleSnapshot.isValidStandardWorkMinutes(standardWorkMinutes)
+            ? standardWorkMinutes
+            : 8 * 60
+        self.restMinutes = WorkScheduleSnapshot.isValidRestMinutes(restMinutes) ? restMinutes : 0
     }
 
     var displayPlaceName: String {

@@ -391,6 +391,45 @@ final class RepositoryTests: XCTestCase {
         XCTAssertEqual(try service.snapshot().activities.first?.name, "备份活动")
     }
 
+    func testInvalidScheduleFieldsAreNormalizedBeforeTriggerPersistence() throws {
+        let direct = ActivityTrigger(
+            activityId: UUID(), type: .geofence,
+            standardWorkMinutes: 8 * 60 + 1,
+            restMinutes: -30
+        )
+        XCTAssertEqual(direct.standardWorkMinutes, 8 * 60)
+        XCTAssertEqual(direct.restMinutes, 0)
+
+        let invalidBackupJSON = try JSONSerialization.data(withJSONObject: [
+            "id": UUID().uuidString,
+            "activityId": UUID().uuidString,
+            "typeRaw": ActivityTriggerType.geofence.rawValue,
+            "isEnabled": true,
+            "isDemoData": false,
+            "placeTypeRaw": PlaceType.work.rawValue,
+            "weekdaysMask": 62,
+            "timeZoneIdentifier": "Asia/Shanghai",
+            "workCalendarModeRaw": "invalid-calendar",
+            "workScheduleModeRaw": "invalid-schedule",
+            "standardWorkMinutes": 8 * 60 + 1,
+            "restMinutes": 12 * 60 + 1,
+            "createdAt": 0,
+            "updatedAt": 0
+        ])
+        let record = try JSONDecoder().decode(ActivityTriggerRecord.self,
+                                              from: invalidBackupJSON)
+        var invalidBackup = BackupSnapshot()
+        invalidBackup.triggers = [record]
+        let persistence = try PersistenceController(inMemory: true)
+        let service = DataBackupService(container: persistence.container)
+        XCTAssertEqual(try service.merge(invalidBackup), 1)
+        let restored = try XCTUnwrap(try service.snapshot().triggers.first)
+        XCTAssertEqual(restored.workCalendarModeRaw, WorkCalendarMode.customWeekdays.rawValue)
+        XCTAssertEqual(restored.workScheduleModeRaw, WorkScheduleMode.fixedWindow.rawValue)
+        XCTAssertEqual(restored.standardWorkMinutes, 8 * 60)
+        XCTAssertEqual(restored.restMinutes, 0)
+    }
+
     func testBackupRejectsMalformedAndUnsupportedFilesWithoutChangingStore() throws {
         XCTAssertThrowsError(try BackupArchive.decrypt(Data("bad".utf8), password: "password"))
         let persistence = try PersistenceController(inMemory: true)

@@ -307,6 +307,39 @@ final class AnalyticsServiceTests: XCTestCase {
             calendarMode: .chinaStatutory, scheduleMode: .fixedWindow,
             standardWorkMinutes: 480, restMinutes: 12 * 60 + 30
         ))
+        XCTAssertNil(WorkScheduleSnapshot(
+            weekdaysMask: 62, startMinute: nil, endMinute: nil,
+            timeZoneIdentifier: "Asia/Shanghai", isEnabled: true,
+            calendarMode: .chinaStatutory, scheduleMode: .flexibleDuration,
+            standardWorkMinutes: 8 * 60 + 1, restMinutes: 0
+        ))
+        XCTAssertNil(WorkScheduleSnapshot(
+            weekdaysMask: 62, startMinute: 540, endMinute: 1080,
+            timeZoneIdentifier: "Asia/Shanghai", isEnabled: true,
+            calendarMode: .chinaStatutory, scheduleMode: .fixedWindow,
+            standardWorkMinutes: 480, restMinutes: 60 + 1
+        ))
+    }
+
+    func testFlexibleActivityTriggerProjectsEnabledSnapshotWithoutFixedTimes() throws {
+        let trigger = ActivityTrigger(
+            activityId: activityId,
+            type: .geofence,
+            weekdaysMask: 0b0111110,
+            normalStartMinute: nil,
+            normalEndMinute: nil,
+            timeZoneIdentifier: "Asia/Shanghai",
+            workCalendarMode: .chinaStatutory,
+            workScheduleMode: .flexibleDuration,
+            standardWorkMinutes: 8 * 60,
+            restMinutes: 3 * 60
+        )
+
+        let snapshot = try XCTUnwrap(trigger.workScheduleSnapshot)
+        XCTAssertTrue(snapshot.isEnabled)
+        XCTAssertEqual(snapshot.scheduleMode, .flexibleDuration)
+        XCTAssertNil(snapshot.startMinute)
+        XCTAssertNil(snapshot.endMinute)
     }
 
     func testNightShiftSplitsEarlyAndLateOvertime() throws {
